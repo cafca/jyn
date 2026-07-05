@@ -6,6 +6,9 @@
 /data
 *.log
 
+# Release build artifacts (scripts/release.sh)
+/dist
+
 # OS / editor cruft
 .DS_Store
 .idea/
