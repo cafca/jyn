@@ -1,0 +1,111 @@
+name: app
+
+# The Flutter app. Also runs on core changes, since the app compiles the core
+# (cargokit) and links its FFI surface — a core change must re-verify it.
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'app/**'
+      - 'core/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/app.yml'
+  pull_request:
+    paths:
+      - 'app/**'
+      - 'core/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/app.yml'
+
+concurrency:
+  group: app-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # Bump alongside the local toolchain (see README) so CI mirrors dev.
+  FLUTTER_VERSION: 3.41.7
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: Resolve packages
+        run: flutter pub get
+      - name: Formatting
+        # Exclude generated bindings and vendored cargokit — dart format
+        # doesn't honour analysis_options excludes for file discovery.
+        run: >
+          dart format --output=none --set-exit-if-changed
+          $(git ls-files '*.dart' ':(exclude)lib/src/rust/**' ':(exclude)rust_builder/**')
+      - name: Analyze
+        run: dart analyze
+
+  build-test-macos:
+    name: build & test (macOS)
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      # cargokit compiles the core during `flutter build`, so the host needs a
+      # Rust toolchain too.
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: Resolve packages
+        run: flutter pub get
+      - name: Test
+        run: flutter test
+      - name: Build (debug)
+        run: flutter build macos --debug
+
+  # Guards the Rust ↔ Dart boundary: regenerating from the current core must
+  # produce no diff, so a changed API with stale committed bindings fails here
+  # instead of at runtime.
+  codegen-drift:
+    name: codegen drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - uses: baptiste0928/cargo-install@v3
+        with:
+          crate: flutter_rust_bridge_codegen
+          version: "2.12.0"
+      - name: Resolve packages
+        working-directory: app
+        run: flutter pub get
+      - name: Regenerate bindings
+        working-directory: app
+        run: flutter_rust_bridge_codegen generate
+      - name: Fail on drift
+        working-directory: app
+        run: git diff --exit-code -- lib/src/rust
