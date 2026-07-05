@@ -55,7 +55,7 @@ impl AppSettings {
     }
 }
 
-#[derive(Debug, bevy::prelude::Resource)]
+#[derive(Debug)]
 pub struct SettingsStore {
     path: PathBuf,
     settings: AppSettings,

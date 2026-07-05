@@ -2,7 +2,7 @@
 
 /// How urgently a post's remaining lifetime should read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum UrgencyTier {
+pub enum UrgencyTier {
     /// Permanent — no lifetime at all.
     Settled,
     Normal,
@@ -17,7 +17,7 @@ const CRITICAL_THRESHOLD_SECS: u64 = 3600;
 
 /// Formats the remaining lifetime of a post ("34h", "4h12m", "58m", "<1m")
 /// with its urgency tier. `expires_at <= now` renders as "ebbing away".
-pub(crate) fn format_remaining(now: u64, expires_at: u64) -> (String, UrgencyTier) {
+pub fn format_remaining(now: u64, expires_at: u64) -> (String, UrgencyTier) {
     let Some(remaining) = expires_at.checked_sub(now).filter(|left| *left > 0) else {
         return ("ebbing away".to_owned(), UrgencyTier::Critical);
     };

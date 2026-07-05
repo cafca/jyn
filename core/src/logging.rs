@@ -1,41 +1,23 @@
+//! Tracing setup for the embedded core: a platform-appropriate log file plus
+//! stderr. Formerly lived in the Bevy binary's `main.rs`.
+
 use std::path::PathBuf;
 
-use bevy::prelude::*;
-use bevy::window::{Window, WindowPlugin, WindowResolution};
-use bevy_egui::EguiPlugin;
-use jyn::plugin::JynPlugin;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::{fmt, EnvFilter};
 
-fn main() {
-    let _log_guard = init_logging();
-
-    let title = format!("jyn v{}", env!("CARGO_PKG_VERSION"));
-
-    App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window {
-                title,
-                resolution: WindowResolution::new(508.0, 760.0),
-                ..default()
-            }),
-            ..default()
-        }))
-        .add_plugins(EguiPlugin {
-            enable_multipass_for_primary_context: false,
-        })
-        .add_plugins(JynPlugin)
-        .run();
-}
-
-/// Initialise a tracing subscriber that writes to a platform-appropriate log file and to stderr.
+/// Initialise a tracing subscriber that writes to a platform-appropriate log
+/// file and to stderr.
 ///
-/// The returned guard must be kept alive for the duration of the process; dropping it flushes and
-/// closes the background log writer thread.
+/// The returned guard must be kept alive for the duration of the process;
+/// dropping it flushes and closes the background log writer thread. Returns
+/// `None` (and stays silent) when no log directory can be resolved or a
+/// subscriber is already installed.
 ///
-/// Log levels are controlled via the `RUST_LOG` environment variable and default to `info`.
-fn init_logging() -> Option<WorkerGuard> {
+/// Log levels are controlled via the `RUST_LOG` environment variable and
+/// default to `info`.
+pub fn init_logging() -> Option<WorkerGuard> {
     let log_dir = resolve_log_dir()?;
     std::fs::create_dir_all(&log_dir).ok()?;
 
@@ -48,7 +30,8 @@ fn init_logging() -> Option<WorkerGuard> {
         .with(filter)
         .with(fmt::layer().with_ansi(false).with_writer(non_blocking))
         .with(fmt::layer().with_writer(std::io::stderr))
-        .init();
+        .try_init()
+        .ok()?;
 
     tracing::info!(
         log_file = %log_dir.join("app.log").display(),

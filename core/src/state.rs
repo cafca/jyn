@@ -3,8 +3,6 @@
 
 use std::collections::HashMap;
 
-use bevy::prelude::Resource;
-
 use crate::domain::{ReducedPost, ReducedProfileState};
 use crate::local_stores::KeepRecord;
 
@@ -53,7 +51,7 @@ pub struct RiverPost {
 /// reverse-chronological river with expired posts filtered out. `next_expiry`
 /// lets the tick system know when the river changes shape without any event
 /// arriving (a lifetime running out).
-#[derive(Resource, Default)]
+#[derive(Default)]
 pub struct RiverState {
     own: Option<ReducedProfileState>,
     own_display_name: Option<String>,

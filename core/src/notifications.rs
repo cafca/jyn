@@ -7,7 +7,6 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use bevy::prelude::Resource;
 use tracing::warn;
 
 use crate::bridge::NetworkEvent;
@@ -92,7 +91,6 @@ fn escape_xml(input: &str) -> String {
         .replace('\'', "&apos;")
 }
 
-#[derive(Resource)]
 pub struct NotificationState {
     sender: Box<dyn NotificationSender>,
     warned_unavailable: bool,

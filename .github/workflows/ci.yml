@@ -34,18 +34,6 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      - name: Install Bevy system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libasound2-dev \
-            libudev-dev \
-            libwayland-dev \
-            libx11-dev \
-            libxcursor-dev \
-            libxi-dev \
-            libxkbcommon-dev \
-            libxrandr-dev
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
       - name: Clippy

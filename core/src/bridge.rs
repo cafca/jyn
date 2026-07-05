@@ -8,7 +8,6 @@ use std::thread::{self, JoinHandle};
 use std::time::SystemTime;
 
 use anyhow::{Context, Result};
-use bevy::prelude::Resource;
 use flume::{Receiver, Sender, TryRecvError};
 use std::sync::Mutex;
 
@@ -230,7 +229,6 @@ pub enum NetworkEvent {
     },
 }
 
-#[derive(Resource)]
 pub struct AsyncBridge {
     command_tx: Sender<NetworkCommand>,
     event_rx: Receiver<NetworkEvent>,
@@ -239,7 +237,7 @@ pub struct AsyncBridge {
 
 impl AsyncBridge {
     pub fn spawn(node_options: NodeOptions) -> Result<Self> {
-        let data_dir = super::plugin::resolve_data_dir()?;
+        let data_dir = crate::app_config::resolve_data_dir()?;
         Self::spawn_with_data_dir(node_options, data_dir)
     }
 
@@ -1173,7 +1171,7 @@ mod tests {
     }
 
     #[test]
-    fn commands_sent_from_bevy_thread_are_received_by_network_thread() {
+    fn commands_sent_from_ui_thread_are_received_by_network_thread() {
         let bridge = spawn_test_bridge(|_, command, events| {
             Box::pin(async move {
                 match command {

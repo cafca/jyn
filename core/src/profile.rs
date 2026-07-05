@@ -65,7 +65,7 @@ impl UserProfile {
     }
 }
 
-#[derive(Debug, bevy::prelude::Resource)]
+#[derive(Debug)]
 pub struct ProfileStore {
     pool: SqlitePool,
     profile: UserProfile,
