@@ -45,7 +45,11 @@ fi
 # 1. Project VERSION into the Flutter build numbers.
 python3 scripts/release_tools.py sync-pubspec "$SEMVER" "$BUILD" app/pubspec.yaml
 
-# 2. Build the release app (cargokit compiles the Rust core).
+# 2. Build the release app (cargokit compiles the Rust core). Remove any prior
+#    build output first: once it has been Developer ID-signed macOS protects it
+#    (App Management), and the in-place rebuild's lipo step then fails with
+#    "Operation not permitted".
+rm -rf "$APP"
 (cd app && flutter build macos --release)
 
 # 3. Strip extended attributes / AppleDouble sidecars first: otherwise archiving
