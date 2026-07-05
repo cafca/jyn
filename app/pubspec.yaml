@@ -44,6 +44,7 @@ dependencies:
   just_audio: ^0.10.6
   video_player: ^2.11.1
   url_launcher: ^6.3.2
+  auto_updater: ^1.0.0
 
 dev_dependencies:
   flutter_test:

@@ -15,5 +15,13 @@
 	<!-- Composer attachments via the file picker. -->
 	<key>com.apple.security.files.user-selected.read-only</key>
 	<true/>
+	<!-- Sparkle's sandboxed installer XPC service. The two mach services are
+	     derived from the bundle id (see SUEnableInstallerLauncherService); the
+	     downloader XPC is not needed since network.client is granted above. -->
+	<key>com.apple.security.temporary-exception.mach-lookup.global-name</key>
+	<array>
+		<string>$(PRODUCT_BUNDLE_IDENTIFIER)-spks</string>
+		<string>$(PRODUCT_BUNDLE_IDENTIFIER)-spki</string>
+	</array>
 </dict>
 </plist>
