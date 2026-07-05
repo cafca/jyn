@@ -1,0 +1,66 @@
+# cargo-deny configuration. Run `cargo deny check` locally; CI runs it on
+# any change that touches the Rust core (see .github/workflows/ci.yml).
+
+[graph]
+# Check every target we ship to, so a platform-only dependency's advisory or
+# license can't slip through.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-apple-darwin",
+    "aarch64-apple-ios",
+    "x86_64-pc-windows-msvc",
+    "aarch64-linux-android",
+]
+all-features = true
+
+[advisories]
+version = 2
+# Only fail on an unmaintained crate we depend on directly — we can't fix
+# unmaintained transitive deps (paste, proc-macro-error, …) buried in the
+# iroh/p2panda stack, but we do want to hear about our own.
+unmaintained = "workspace"
+# No advisory ignores. Note: `cargo audit` (lockfile-based) flags
+# RUSTSEC-2023-0071 (rsa Marvin attack), but that's a false positive here —
+# rsa only enters via sqlx-mysql, which we never compile (sqlx uses the
+# sqlite feature only). cargo-deny's feature-aware graph excludes it, so no
+# ignore is needed; if a future change genuinely pulls rsa in, this check
+# should fail.
+
+[licenses]
+version = 2
+# Permissive and weak-copyleft (MPL/MOZ file-level) licenses only. Dual-
+# licensed crates like self_cell (Apache-2.0 OR GPL-2.0-only) and r-efi
+# (… OR LGPL-2.1-or-later) resolve to their permissive option here, so no
+# strong-copyleft obligation is taken on.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "MIT-0",
+    "BSD-1-Clause",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "0BSD",
+    "BSL-1.0",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+confidence-threshold = 0.9
+
+[bans]
+# The dependency tree is wide (iroh + p2panda + Flutter FFI); duplicate
+# versions are inevitable and not worth failing a build over.
+multiple-versions = "warn"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+# The p2panda crates track a maintainer fork until the upstream release
+# carrying the blob APIs lands (see core/Cargo.toml).
+[sources.allow-org]
+github = ["cafca"]
