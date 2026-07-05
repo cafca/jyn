@@ -6,52 +6,170 @@ on:
       - main
   pull_request:
 
+# A newer push to the same ref supersedes an in-flight run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # Bump alongside the local toolchain (see README) so CI mirrors dev.
+  FLUTTER_VERSION: 3.41.7
 
 jobs:
-  fmt:
-    name: Formatting
+  # Which halves of the repo did this change touch? Gates the jobs below so a
+  # Dart-only change never spends time rebuilding the Rust core. `app` also
+  # watches `core/**` because the app compiles the core (cargokit) and links
+  # against its FFI surface, so a core change must re-verify the app.
+  changes:
+    name: changes
     runs-on: ubuntu-latest
+    outputs:
+      core: ${{ steps.filter.outputs.core }}
+      app: ${{ steps.filter.outputs.app }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-      - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
         with:
-          components: rustfmt
-      - name: Check formatting
-        run: cargo fmt --all --check
+          filters: |
+            core:
+              - 'core/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - '.github/workflows/ci.yml'
+            app:
+              - 'app/**'
+              - 'core/**'
+              - '.github/workflows/ci.yml'
 
-  lint-and-test:
-    name: Clippy, build & test (Linux)
+  core-lint:
+    name: core · lint
+    needs: changes
+    if: needs.changes.outputs.core == 'true'
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-      - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
-      - name: Cache cargo artifacts
-        uses: Swatinem/rust-cache@v2
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Formatting
+        run: cargo fmt --all --check
       - name: Clippy
         run: cargo clippy --all-targets --locked -- -D warnings
+
+  core-build-test-linux:
+    name: core · build & test (Linux)
+    needs: changes
+    if: needs.changes.outputs.core == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       - name: Build
         run: cargo build --locked
       - name: Test
         run: cargo test --locked -- --nocapture --test-threads=1
 
-  build-macos:
-    name: Build (macOS)
+  # Host-specific compile check: catches the macOS `#[cfg]` branches and the
+  # Apple-framework linking that Linux can't see. Logic is already covered on
+  # Linux, so this is build-only.
+  core-build-macos:
+    name: core · build (macOS)
+    needs: changes
+    if: needs.changes.outputs.core == 'true'
     runs-on: macos-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-      - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-      - name: Cache cargo artifacts
-        uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       - name: Build
         run: cargo build --locked
+
+  app-lint:
+    name: app · lint
+    needs: changes
+    if: needs.changes.outputs.app == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: Resolve packages
+        run: flutter pub get
+      - name: Formatting
+        # Exclude generated bindings and vendored cargokit — dart format
+        # doesn't honour analysis_options excludes for file discovery.
+        run: >
+          dart format --output=none --set-exit-if-changed
+          $(git ls-files '*.dart' ':(exclude)lib/src/rust/**' ':(exclude)rust_builder/**')
+      - name: Analyze
+        run: dart analyze
+
+  app-build-test-macos:
+    name: app · build & test (macOS)
+    needs: changes
+    if: needs.changes.outputs.app == 'true'
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      # cargokit compiles the core during `flutter build`, so the host needs
+      # a Rust toolchain too.
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: Resolve packages
+        run: flutter pub get
+      - name: Test
+        run: flutter test
+      - name: Build (debug)
+        run: flutter build macos --debug
+
+  # Guards the Rust ↔ Dart boundary: regenerating from the current core must
+  # produce no diff, so a changed API with stale committed bindings fails
+  # here instead of at runtime.
+  app-codegen-drift:
+    name: app · codegen drift
+    needs: changes
+    if: needs.changes.outputs.app == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - uses: baptiste0928/cargo-install@v3
+        with:
+          crate: flutter_rust_bridge_codegen
+          version: "2.12.0"
+      - name: Resolve packages
+        working-directory: app
+        run: flutter pub get
+      - name: Regenerate bindings
+        working-directory: app
+        run: flutter_rust_bridge_codegen generate
+      - name: Fail on drift
+        working-directory: app
+        run: git diff --exit-code -- lib/src/rust

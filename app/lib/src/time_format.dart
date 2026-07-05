@@ -31,8 +31,8 @@ RemainingLabel formatRemaining(int now, int expiresAt) {
   final tier = remaining < _criticalThresholdSecs
       ? UrgencyTier.critical
       : remaining < _warmThresholdSecs
-          ? UrgencyTier.warm
-          : UrgencyTier.normal;
+      ? UrgencyTier.warm
+      : UrgencyTier.normal;
 
   final String label;
   if (remaining >= 48 * 3600) {

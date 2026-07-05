@@ -56,11 +56,13 @@ class _ComposerState extends ConsumerState<Composer> {
   @override
   Widget build(BuildContext context) {
     final profile = ref.watch(profileProvider);
-    final visibility = _visibility ?? profile?.defaultVisibility ?? Visibility.friends;
-    final lifetimeSecs =
-        _lifetimeTouched ? _lifetimeSecs : profile?.defaultLifetimeSecs;
-    final canCast = !_casting &&
-        (_body.text.trim().isNotEmpty || _attachments.isNotEmpty);
+    final visibility =
+        _visibility ?? profile?.defaultVisibility ?? Visibility.friends;
+    final lifetimeSecs = _lifetimeTouched
+        ? _lifetimeSecs
+        : profile?.defaultLifetimeSecs;
+    final canCast =
+        !_casting && (_body.text.trim().isNotEmpty || _attachments.isNotEmpty);
 
     return Card(
       child: Padding(
@@ -86,9 +88,7 @@ class _ComposerState extends ConsumerState<Composer> {
                   for (final (index, draft) in _attachments.indexed)
                     InputChip(
                       avatar: Icon(
-                        draft.waveform != null
-                            ? Icons.mic
-                            : Icons.attach_file,
+                        draft.waveform != null ? Icons.mic : Icons.attach_file,
                         size: 16,
                       ),
                       label: Text(
@@ -151,8 +151,9 @@ class _ComposerState extends ConsumerState<Composer> {
                   icon: const Icon(Icons.attach_file),
                 ),
                 FilledButton.icon(
-                  onPressed:
-                      canCast ? () => _cast(visibility, lifetimeSecs) : null,
+                  onPressed: canCast
+                      ? () => _cast(visibility, lifetimeSecs)
+                      : null,
                   icon: const Icon(Icons.water_drop_outlined, size: 18),
                   label: const Text('cast'),
                 ),

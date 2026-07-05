@@ -37,16 +37,18 @@ class _VoiceRecorderButtonState extends State<VoiceRecorderButton> {
       if (path == null) return;
       try {
         final summary = await rust_media.voiceNoteSummary(wavPath: path);
-        widget.onRecorded(MediaDraftInput(
-          path: path,
-          durationMs: summary.durationMs,
-          waveform: summary.waveform,
-        ));
+        widget.onRecorded(
+          MediaDraftInput(
+            path: path,
+            durationMs: summary.durationMs,
+            waveform: summary.waveform,
+          ),
+        );
       } catch (error) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('voice note failed: $error')),
-          );
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text('voice note failed: $error')));
         }
       }
       return;
@@ -79,15 +81,16 @@ class _VoiceRecorderButtonState extends State<VoiceRecorderButton> {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return IconButton(
-      tooltip: _micError ?? (_recording ? 'stop recording' : 'record a voice note'),
+      tooltip:
+          _micError ?? (_recording ? 'stop recording' : 'record a voice note'),
       onPressed: _micError != null && !_recording ? null : _toggle,
       isSelected: _recording,
       icon: Icon(
         _micError != null
             ? Icons.mic_off
             : _recording
-                ? Icons.stop_circle
-                : Icons.mic_none,
+            ? Icons.stop_circle
+            : Icons.mic_none,
         color: _recording ? scheme.error : null,
       ),
     );

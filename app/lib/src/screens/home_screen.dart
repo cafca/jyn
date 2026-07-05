@@ -66,8 +66,8 @@ class HomeScreen extends ConsumerWidget {
                     child: Text(
                       'the river is quiet',
                       style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                            color: Theme.of(context).colorScheme.outline,
-                          ),
+                        color: Theme.of(context).colorScheme.outline,
+                      ),
                     ),
                   ),
                 ),

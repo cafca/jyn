@@ -65,8 +65,9 @@ class _FriendsScreenState extends ConsumerState<FriendsScreen> {
                           code == null
                               ? '…'
                               : '${code.substring(0, code.length.clamp(0, 40))}…',
-                          style: theme.textTheme.bodySmall
-                              ?.copyWith(fontFamily: 'monospace'),
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            fontFamily: 'monospace',
+                          ),
                           overflow: TextOverflow.ellipsis,
                         ),
                       ),
@@ -76,11 +77,13 @@ class _FriendsScreenState extends ConsumerState<FriendsScreen> {
                             ? null
                             : () async {
                                 await Clipboard.setData(
-                                    ClipboardData(text: code));
+                                  ClipboardData(text: code),
+                                );
                                 if (context.mounted) {
                                   ScaffoldMessenger.of(context).showSnackBar(
                                     const SnackBar(
-                                        content: Text('code copied')),
+                                      content: Text('code copied'),
+                                    ),
                                   );
                                 }
                               },
@@ -161,8 +164,9 @@ class _FriendsScreenState extends ConsumerState<FriendsScreen> {
                   padding: const EdgeInsets.symmetric(vertical: 16),
                   child: Text(
                     'nobody yet — trade codes with a friend',
-                    style: theme.textTheme.bodyMedium
-                        ?.copyWith(color: theme.colorScheme.outline),
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.outline,
+                    ),
                   ),
                 ),
               for (final friend in friends)
@@ -182,8 +186,8 @@ class _FriendsScreenState extends ConsumerState<FriendsScreen> {
                   ),
                   trailing: IconButton(
                     tooltip: 'unfriend',
-                    onPressed: () => _confirmUnfriend(friend.displayName,
-                        friend.profileId),
+                    onPressed: () =>
+                        _confirmUnfriend(friend.displayName, friend.profileId),
                     icon: const Icon(Icons.person_remove_outlined, size: 20),
                   ),
                 ),
@@ -200,7 +204,8 @@ class _FriendsScreenState extends ConsumerState<FriendsScreen> {
       builder: (context) => AlertDialog(
         title: Text('unfriend $name?'),
         content: const Text(
-            'Their river dries up for you, and yours for them.'),
+          'Their river dries up for you, and yours for them.',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),

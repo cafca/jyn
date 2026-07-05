@@ -7,16 +7,22 @@ void main() {
     test('media paths accumulate across MediaReady events', () {
       var model = const AppModel();
       model = applyEvent(
-          model, const JynEvent.mediaReady(blobHash: 'a', path: '/tmp/a'));
+        model,
+        const JynEvent.mediaReady(blobHash: 'a', path: '/tmp/a'),
+      );
       model = applyEvent(
-          model, const JynEvent.mediaReady(blobHash: 'b', path: '/tmp/b'));
+        model,
+        const JynEvent.mediaReady(blobHash: 'b', path: '/tmp/b'),
+      );
       expect(model.mediaPaths, {'a': '/tmp/a', 'b': '/tmp/b'});
     });
 
     test('a failed fetch leaves the model unchanged', () {
       var model = const AppModel();
-      model = applyEvent(model,
-          const JynEvent.mediaFailed(blobHash: 'a', errorMessage: 'gone'));
+      model = applyEvent(
+        model,
+        const JynEvent.mediaFailed(blobHash: 'a', errorMessage: 'gone'),
+      );
       expect(model.mediaPaths, isEmpty);
       expect(model.errors, isEmpty);
     });
@@ -25,7 +31,9 @@ void main() {
       var model = const AppModel();
       for (var i = 0; i < 5; i++) {
         model = applyEvent(
-            model, JynEvent.error(context: 'sync', message: 'boom $i'));
+          model,
+          JynEvent.error(context: 'sync', message: 'boom $i'),
+        );
       }
       expect(model.errors, ['sync: boom 2', 'sync: boom 3', 'sync: boom 4']);
     });
@@ -37,15 +45,18 @@ void main() {
         const JynEvent.friends(
           friends: [
             FriendEntry(
-                profileId: 'anna',
-                displayName: 'Anna',
-                followsMeBack: true),
+              profileId: 'anna',
+              displayName: 'Anna',
+              followsMeBack: true,
+            ),
           ],
           pending: [],
         ),
       );
       model = applyEvent(
-          model, const JynEvent.friends(friends: [], pending: []));
+        model,
+        const JynEvent.friends(friends: [], pending: []),
+      );
       expect(model.friends, isEmpty);
     });
   });

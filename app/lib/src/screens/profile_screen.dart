@@ -37,12 +37,12 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
-    final name =
-        _name ??= TextEditingController(text: profile.displayName);
+    final name = _name ??= TextEditingController(text: profile.displayName);
     final bio = _bio ??= TextEditingController(text: profile.bio);
     final visibility = _defaultVisibility ?? profile.defaultVisibility;
-    final lifetime =
-        _lifetimeTouched ? _defaultLifetime : profile.defaultLifetimeSecs;
+    final lifetime = _lifetimeTouched
+        ? _defaultLifetime
+        : profile.defaultLifetimeSecs;
 
     return Scaffold(
       appBar: AppBar(title: const Text('profile')),
@@ -54,8 +54,9 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
             children: [
               Text(
                 shortId(profile.profileId),
-                style: theme.textTheme.labelSmall
-                    ?.copyWith(fontFamily: 'monospace'),
+                style: theme.textTheme.labelSmall?.copyWith(
+                  fontFamily: 'monospace',
+                ),
               ),
               const SizedBox(height: 16),
               TextField(

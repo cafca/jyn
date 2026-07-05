@@ -16,8 +16,9 @@ class OnboardingScreen extends StatefulWidget {
 }
 
 class _OnboardingScreenState extends State<OnboardingScreen> {
-  late final TextEditingController _name =
-      TextEditingController(text: widget.profile.displayName);
+  late final TextEditingController _name = TextEditingController(
+    text: widget.profile.displayName,
+  );
   bool _busy = false;
 
   @override

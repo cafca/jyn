@@ -72,8 +72,8 @@ class _VoiceNotePlayerState extends State<VoiceNotePlayer> {
                   fetching
                       ? Icons.downloading
                       : playing
-                          ? Icons.pause_circle_filled
-                          : Icons.play_circle_filled,
+                      ? Icons.pause_circle_filled
+                      : Icons.play_circle_filled,
                   color: fetching ? scheme.outline : scheme.primary,
                 ),
               );
@@ -83,10 +83,7 @@ class _VoiceNotePlayerState extends State<VoiceNotePlayer> {
             width: 120,
             height: 28,
             child: CustomPaint(
-              painter: _WaveformPainter(
-                peaks: waveform,
-                color: scheme.primary,
-              ),
+              painter: _WaveformPainter(peaks: waveform, color: scheme.primary),
             ),
           ),
           if (seconds != null)

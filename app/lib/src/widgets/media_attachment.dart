@@ -36,10 +36,10 @@ class MediaAttachmentView extends ConsumerWidget {
       MediaKind.photo => _photo(context, path),
       MediaKind.audio => VoiceNotePlayer(attachment: attachment, path: path),
       MediaKind.video => VideoAttachment(
-          attachment: attachment,
-          path: path,
-          playerKey: '$postId:${attachment.blobHash}',
-        ),
+        attachment: attachment,
+        path: path,
+        playerKey: '$postId:${attachment.blobHash}',
+      ),
       MediaKind.file => _fileChip(context, path),
     };
   }

@@ -59,14 +59,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   children: [
                     Text(
                       'Changes take effect on the next app start.',
-                      style: theme.textTheme.bodySmall
-                          ?.copyWith(color: theme.colorScheme.outline),
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.outline,
+                      ),
                     ),
                     const SizedBox(height: 8),
                     SwitchListTile(
                       title: const Text('local peer discovery (mDNS)'),
                       subtitle: const Text(
-                          'find friends on the same network without a relay'),
+                        'find friends on the same network without a relay',
+                      ),
                       value: settings.mdnsEnabled,
                       onChanged: (enabled) =>
                           _apply(() => rust.setMdnsEnabled(enabled: enabled)),
@@ -77,12 +79,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       groupValue: settings.relayMode,
                       onChanged: (mode) {
                         if (mode == null) return;
-                        _apply(() => rust.setRelayConfig(
-                              relayMode: mode,
-                              customRelayUrl: mode == RelayMode.relay
-                                  ? _relayUrl.text.trim()
-                                  : null,
-                            ));
+                        _apply(
+                          () => rust.setRelayConfig(
+                            relayMode: mode,
+                            customRelayUrl: mode == RelayMode.relay
+                                ? _relayUrl.text.trim()
+                                : null,
+                          ),
+                        );
                       },
                       child: Column(
                         children: [
@@ -97,8 +101,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           if (settings.relayMode == RelayMode.relay ||
                               _relayUrl.text.isNotEmpty)
                             Padding(
-                              padding:
-                                  const EdgeInsets.only(left: 16, bottom: 8),
+                              padding: const EdgeInsets.only(
+                                left: 16,
+                                bottom: 8,
+                              ),
                               child: TextField(
                                 controller: _relayUrl,
                                 decoration: const InputDecoration(
@@ -106,11 +112,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   isDense: true,
                                   border: OutlineInputBorder(),
                                 ),
-                                onSubmitted: (url) =>
-                                    _apply(() => rust.setRelayConfig(
-                                          relayMode: RelayMode.relay,
-                                          customRelayUrl: url.trim(),
-                                        )),
+                                onSubmitted: (url) => _apply(
+                                  () => rust.setRelayConfig(
+                                    relayMode: RelayMode.relay,
+                                    customRelayUrl: url.trim(),
+                                  ),
+                                ),
                               ),
                             ),
                           const RadioListTile<RelayMode>(

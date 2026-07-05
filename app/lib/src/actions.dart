@@ -14,9 +14,9 @@ Future<void> runGuarded(
     await action();
   } catch (error) {
     if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(error.toString())),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
     }
   }
 }
@@ -33,11 +33,11 @@ const lifetimeOptions = <(String, int?)>[
 ];
 
 String visibilityLabel(Visibility visibility) => switch (visibility) {
-      Visibility.friends => '◑ friends',
-      Visibility.circles => '◑ circles',
-      Visibility.public => '◉ public',
-      Visibility.private => '◐ only you',
-    };
+  Visibility.friends => '◑ friends',
+  Visibility.circles => '◑ circles',
+  Visibility.public => '◉ public',
+  Visibility.private => '◐ only you',
+};
 
 /// Visibilities offered by the composer (all of them) — profile defaults
 /// exclude private, matching the core's validation.

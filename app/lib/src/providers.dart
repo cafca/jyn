@@ -102,9 +102,7 @@ AppModel applyEvent(AppModel model, JynEvent event) {
     case JynEvent_Diagnostics(:final snapshot):
       return model.copyWith(diagnostics: snapshot);
     case JynEvent_MediaReady(:final blobHash, :final path):
-      return model.copyWith(
-        mediaPaths: {...model.mediaPaths, blobHash: path},
-      );
+      return model.copyWith(mediaPaths: {...model.mediaPaths, blobHash: path});
     case JynEvent_MediaFailed():
       // The attachment widget retries on tap; nothing to record.
       return model;
@@ -121,26 +119,35 @@ AppModel applyEvent(AppModel model, JynEvent event) {
 /// The single subscription to the Rust event stream. Overridden in tests.
 final jynEventsProvider = Provider<Stream<JynEvent>>((ref) => rust.events());
 
-final appModelProvider =
-    NotifierProvider<AppModelNotifier, AppModel>(AppModelNotifier.new);
+final appModelProvider = NotifierProvider<AppModelNotifier, AppModel>(
+  AppModelNotifier.new,
+);
 
 // Slice providers so screens only rebuild for their data.
-final riverPostsProvider =
-    Provider((ref) => ref.watch(appModelProvider.select((m) => m.posts)));
-final ghostsProvider =
-    Provider((ref) => ref.watch(appModelProvider.select((m) => m.ghosts)));
-final profileProvider =
-    Provider((ref) => ref.watch(appModelProvider.select((m) => m.profile)));
-final friendsProvider =
-    Provider((ref) => ref.watch(appModelProvider.select((m) => m.friends)));
+final riverPostsProvider = Provider(
+  (ref) => ref.watch(appModelProvider.select((m) => m.posts)),
+);
+final ghostsProvider = Provider(
+  (ref) => ref.watch(appModelProvider.select((m) => m.ghosts)),
+);
+final profileProvider = Provider(
+  (ref) => ref.watch(appModelProvider.select((m) => m.profile)),
+);
+final friendsProvider = Provider(
+  (ref) => ref.watch(appModelProvider.select((m) => m.friends)),
+);
 final pendingRequestsProvider = Provider(
-    (ref) => ref.watch(appModelProvider.select((m) => m.pendingRequests)));
-final diagnosticsProvider =
-    Provider((ref) => ref.watch(appModelProvider.select((m) => m.diagnostics)));
-final mediaPathsProvider =
-    Provider((ref) => ref.watch(appModelProvider.select((m) => m.mediaPaths)));
-final backgroundErrorsProvider =
-    Provider((ref) => ref.watch(appModelProvider.select((m) => m.errors)));
+  (ref) => ref.watch(appModelProvider.select((m) => m.pendingRequests)),
+);
+final diagnosticsProvider = Provider(
+  (ref) => ref.watch(appModelProvider.select((m) => m.diagnostics)),
+);
+final mediaPathsProvider = Provider(
+  (ref) => ref.watch(appModelProvider.select((m) => m.mediaPaths)),
+);
+final backgroundErrorsProvider = Provider(
+  (ref) => ref.watch(appModelProvider.select((m) => m.errors)),
+);
 
 /// One shared 1 Hz tick for countdown pills.
 final clockProvider = StreamProvider<int>(

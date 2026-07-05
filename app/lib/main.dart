@@ -23,11 +23,13 @@ Future<void> main() async {
 /// the generated loader assumes. Elsewhere the default (libjyn) is correct.
 Future<ExternalLibrary?> _loadCore() async {
   if (!Platform.isMacOS && !Platform.isIOS) return null;
-  return loadExternalLibrary(const ExternalLibraryLoaderConfig(
-    stem: 'rust_lib_jyn',
-    ioDirectory: '../core/target/release/',
-    webPrefix: null,
-  ));
+  return loadExternalLibrary(
+    const ExternalLibraryLoaderConfig(
+      stem: 'rust_lib_jyn',
+      ioDirectory: '../core/target/release/',
+      webPrefix: null,
+    ),
+  );
 }
 
 class JynApp extends StatefulWidget {
@@ -78,8 +80,9 @@ class _Root extends ConsumerWidget {
     // Surface background errors (user-action failures throw at call sites).
     ref.listen(backgroundErrorsProvider, (previous, next) {
       if (next.isNotEmpty && next.length > (previous?.length ?? 0)) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(next.last)));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(next.last)));
       }
     });
 

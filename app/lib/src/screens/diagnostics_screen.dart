@@ -32,12 +32,18 @@ class DiagnosticsScreen extends ConsumerWidget {
                   Text('nobody in sight', style: theme.textTheme.bodySmall),
                 for (final peer in snapshot.peers) _peerTile(theme, peer),
                 _section(
-                    theme, 'gossip topics (${snapshot.gossipTopics.length})'),
+                  theme,
+                  'gossip topics (${snapshot.gossipTopics.length})',
+                ),
                 for (final topic in snapshot.gossipTopics)
-                  _mono(theme,
-                      '${topic.topicId}  ·  ${topic.peerCount} peer(s)'),
+                  _mono(
+                    theme,
+                    '${topic.topicId}  ·  ${topic.peerCount} peer(s)',
+                  ),
                 _section(theme, 'connection history'),
-                for (final entry in snapshot.connectionHistory.reversed.take(30))
+                for (final entry in snapshot.connectionHistory.reversed.take(
+                  30,
+                ))
                   _mono(
                     theme,
                     '${_time(entry.atUnixMs)}  ${entry.event}'
@@ -55,18 +61,17 @@ class DiagnosticsScreen extends ConsumerWidget {
   }
 
   Widget _section(ThemeData theme, String title) => Padding(
-        padding: const EdgeInsets.only(top: 16, bottom: 8),
-        child: Text(title, style: theme.textTheme.titleSmall),
-      );
+    padding: const EdgeInsets.only(top: 16, bottom: 8),
+    child: Text(title, style: theme.textTheme.titleSmall),
+  );
 
   Widget _mono(ThemeData theme, String text) => Padding(
-        padding: const EdgeInsets.only(bottom: 2),
-        child: SelectableText(
-          text,
-          style:
-              theme.textTheme.bodySmall?.copyWith(fontFamily: 'monospace'),
-        ),
-      );
+    padding: const EdgeInsets.only(bottom: 2),
+    child: SelectableText(
+      text,
+      style: theme.textTheme.bodySmall?.copyWith(fontFamily: 'monospace'),
+    ),
+  );
 
   Widget _peerTile(ThemeData theme, PeerSnapshot peer) {
     final state = switch (peer.state) {

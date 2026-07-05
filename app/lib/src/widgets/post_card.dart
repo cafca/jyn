@@ -63,7 +63,9 @@ class _PostCardState extends ConsumerState<PostCard> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('delete post?'),
-        content: const Text('The delete reaches every copy, kept ones included.'),
+        content: const Text(
+          'The delete reaches every copy, kept ones included.',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -95,23 +97,24 @@ class _PostCardState extends ConsumerState<PostCard> {
           children: [
             Row(
               children: [
-                Text(
-                  post.authorDisplayName,
-                  style: theme.textTheme.titleSmall,
-                ),
+                Text(post.authorDisplayName, style: theme.textTheme.titleSmall),
                 const SizedBox(width: 8),
                 _CountdownPill(expiresAt: post.post.expiresAt),
                 if (post.post.edited) ...[
                   const SizedBox(width: 8),
-                  Text('edited',
-                      style: theme.textTheme.labelSmall
-                          ?.copyWith(color: scheme.outline)),
+                  Text(
+                    'edited',
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: scheme.outline,
+                    ),
+                  ),
                 ],
                 const Spacer(),
                 Text(
                   visibilityLabel(post.post.visibility),
-                  style: theme.textTheme.labelSmall
-                      ?.copyWith(color: scheme.outline),
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: scheme.outline,
+                  ),
                 ),
                 if (post.isSelf) _ownPostMenu(),
               ],
@@ -143,9 +146,7 @@ class _PostCardState extends ConsumerState<PostCard> {
                       ),
                     ),
                     icon: Icon(
-                      post.heartedByMe
-                          ? Icons.favorite
-                          : Icons.favorite_border,
+                      post.heartedByMe ? Icons.favorite : Icons.favorite_border,
                       size: 18,
                       color: post.heartedByMe ? scheme.primary : null,
                     ),
@@ -179,9 +180,7 @@ class _PostCardState extends ConsumerState<PostCard> {
                             ),
                     ),
                     icon: Icon(
-                      post.keptByMe
-                          ? Icons.bookmark
-                          : Icons.bookmark_border,
+                      post.keptByMe ? Icons.bookmark : Icons.bookmark_border,
                       size: 18,
                     ),
                   ),
@@ -214,10 +213,7 @@ class _PostCardState extends ConsumerState<PostCard> {
         icon: const Icon(Icons.more_horiz, size: 18),
       ),
       menuChildren: [
-        MenuItemButton(
-          onPressed: _editDialog,
-          child: const Text('edit'),
-        ),
+        MenuItemButton(onPressed: _editDialog, child: const Text('edit')),
         if (ephemeral)
           MenuItemButton(
             onPressed: () => runGuarded(
@@ -267,8 +263,9 @@ class _PostCardState extends ConsumerState<PostCard> {
                   children: [
                     TextSpan(
                       text: '${comment.commenterDisplayName}  ',
-                      style: theme.textTheme.labelMedium
-                          ?.copyWith(fontWeight: FontWeight.bold),
+                      style: theme.textTheme.labelMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                     TextSpan(text: comment.body),
                   ],
@@ -324,17 +321,21 @@ class _CountdownPill extends ConsumerWidget {
     final scheme = Theme.of(context).colorScheme;
     final expiresAt = this.expiresAt;
     if (expiresAt == null) {
-      return _pill(context, 'settled', scheme.surfaceContainerHighest,
-          scheme.onSurfaceVariant);
+      return _pill(
+        context,
+        'settled',
+        scheme.surfaceContainerHighest,
+        scheme.onSurfaceVariant,
+      );
     }
     ref.watch(clockProvider);
     final remaining = formatRemaining(nowUnixSecs(), expiresAt);
     final (background, foreground) = switch (remaining.tier) {
       UrgencyTier.critical => (scheme.errorContainer, scheme.onErrorContainer),
       UrgencyTier.warm => (
-          scheme.tertiaryContainer,
-          scheme.onTertiaryContainer
-        ),
+        scheme.tertiaryContainer,
+        scheme.onTertiaryContainer,
+      ),
       _ => (scheme.secondaryContainer, scheme.onSecondaryContainer),
     };
     return _pill(context, remaining.label, background, foreground);
@@ -354,10 +355,9 @@ class _CountdownPill extends ConsumerWidget {
       ),
       child: Text(
         label,
-        style: Theme.of(context)
-            .textTheme
-            .labelSmall
-            ?.copyWith(color: foreground),
+        style: Theme.of(
+          context,
+        ).textTheme.labelSmall?.copyWith(color: foreground),
       ),
     );
   }
