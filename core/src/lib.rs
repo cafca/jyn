@@ -1,4 +1,6 @@
+pub mod api;
 pub mod app_config;
+mod frb_generated;
 pub mod bridge;
 pub mod data_schema;
 pub mod diagnostics;
