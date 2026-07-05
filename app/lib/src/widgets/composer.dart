@@ -6,6 +6,7 @@ import '../actions.dart';
 import '../providers.dart';
 import '../rust/api/commands.dart';
 import '../rust/domain.dart';
+import 'voice_note_player.dart';
 import 'voice_recorder.dart';
 
 /// The composer: body, visibility, lifetime, attachments, cast.
@@ -86,20 +87,37 @@ class _ComposerState extends ConsumerState<Composer> {
                 runSpacing: 4,
                 children: [
                   for (final (index, draft) in _attachments.indexed)
-                    InputChip(
-                      avatar: Icon(
-                        draft.waveform != null ? Icons.mic : Icons.attach_file,
-                        size: 16,
+                    if (draft.waveform != null)
+                      // Recorded voice notes are always WAV; play them back
+                      // before casting, then a compact remove affordance.
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          VoiceNotePlayer(
+                            waveform: draft.waveform,
+                            durationMs: draft.durationMs,
+                            mime: 'audio/wav',
+                            path: draft.path,
+                          ),
+                          IconButton(
+                            visualDensity: VisualDensity.compact,
+                            tooltip: 'remove voice note',
+                            icon: const Icon(Icons.close, size: 18),
+                            onPressed: () =>
+                                setState(() => _attachments.removeAt(index)),
+                          ),
+                        ],
+                      )
+                    else
+                      InputChip(
+                        avatar: const Icon(Icons.attach_file, size: 16),
+                        label: Text(
+                          draft.path.split('/').last,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        onDeleted: () =>
+                            setState(() => _attachments.removeAt(index)),
                       ),
-                      label: Text(
-                        draft.waveform != null
-                            ? 'voice note'
-                            : draft.path.split('/').last,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      onDeleted: () =>
-                          setState(() => _attachments.removeAt(index)),
-                    ),
                 ],
               ),
             const SizedBox(height: 8),

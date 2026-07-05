@@ -34,7 +34,12 @@ class MediaAttachmentView extends ConsumerWidget {
 
     return switch (attachment.kind) {
       MediaKind.photo => _photo(context, path),
-      MediaKind.audio => VoiceNotePlayer(attachment: attachment, path: path),
+      MediaKind.audio => VoiceNotePlayer(
+        waveform: attachment.waveform,
+        durationMs: attachment.durationMs,
+        mime: attachment.mime,
+        path: path,
+      ),
       MediaKind.video => VideoAttachment(
         attachment: attachment,
         path: path,
