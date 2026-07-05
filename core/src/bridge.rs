@@ -229,8 +229,16 @@ pub enum NetworkEvent {
     },
 }
 
+/// A command paired with an optional responder: fire-and-forget callers pass
+/// `None` and failures surface as [`NetworkEvent::Error`]s; awaitable callers
+/// receive the command's outcome directly instead.
+type CommandEnvelope = (
+    NetworkCommand,
+    Option<tokio::sync::oneshot::Sender<Result<(), String>>>,
+);
+
 pub struct AsyncBridge {
-    command_tx: Sender<NetworkCommand>,
+    command_tx: Sender<CommandEnvelope>,
     event_rx: Receiver<NetworkEvent>,
     runtime_thread: Mutex<Option<JoinHandle<()>>>,
 }
@@ -313,8 +321,23 @@ impl AsyncBridge {
 
     pub fn send(&self, command: NetworkCommand) -> Result<()> {
         self.command_tx
-            .send(command)
+            .send((command, None))
             .context("failed to send command to network thread")
+    }
+
+    /// Sends a command and returns a receiver that resolves with the
+    /// command's outcome once the worker finished it. Unlike [`Self::send`],
+    /// failures do NOT additionally surface as [`NetworkEvent::Error`]s —
+    /// the caller owns the error.
+    pub fn send_awaited(
+        &self,
+        command: NetworkCommand,
+    ) -> Result<tokio::sync::oneshot::Receiver<Result<(), String>>> {
+        let (responder, receiver) = tokio::sync::oneshot::channel();
+        self.command_tx
+            .send((command, Some(responder)))
+            .context("failed to send command to network thread")?;
+        Ok(receiver)
     }
 
     pub fn try_recv(&self) -> Result<Option<NetworkEvent>, TryRecvError> {
@@ -323,6 +346,18 @@ impl AsyncBridge {
             Err(TryRecvError::Empty) => Ok(None),
             Err(err) => Err(err),
         }
+    }
+
+    /// A receiver handle for a dedicated consumer thread. Events are
+    /// delivered to whichever receiver claims them first — use either this
+    /// or `try_recv`/`drain_events`, not both.
+    pub(crate) fn event_receiver(&self) -> Receiver<NetworkEvent> {
+        self.event_rx.clone()
+    }
+
+    /// A fire-and-forget command sender handle for a consumer thread.
+    pub(crate) fn command_sender(&self) -> Sender<CommandEnvelope> {
+        self.command_tx.clone()
     }
 
     pub fn drain_events(&self) -> Vec<NetworkEvent> {
@@ -353,7 +388,7 @@ impl Drop for AsyncBridge {
 
 async fn run_network_loop<State, Worker>(
     state: Arc<State>,
-    command_rx: Receiver<NetworkCommand>,
+    command_rx: Receiver<CommandEnvelope>,
     event_tx: Sender<NetworkEvent>,
     worker: Arc<Worker>,
 ) where
@@ -363,7 +398,7 @@ async fn run_network_loop<State, Worker>(
         + Sync
         + 'static,
 {
-    while let Ok(command) = command_rx.recv_async().await {
+    while let Ok((command, responder)) = command_rx.recv_async().await {
         let state = Arc::clone(&state);
         let event_tx = event_tx.clone();
         let worker = Arc::clone(&worker);
@@ -371,14 +406,27 @@ async fn run_network_loop<State, Worker>(
         let context_label = command.context_label();
 
         tokio::spawn(async move {
-            if let Err(err) = worker(state, command, event_tx.clone()).await {
-                if is_user_action {
-                    let _ = event_tx.send(NetworkEvent::Error {
-                        context: context_label.to_owned(),
-                        error_message: err.to_string(),
-                    });
-                } else {
-                    tracing::warn!("background network command failed ({context_label}): {err:#}");
+            let result = worker(state, command, event_tx.clone()).await;
+            match responder {
+                Some(responder) => {
+                    if let Err(err) = &result {
+                        tracing::debug!("awaited command failed ({context_label}): {err:#}");
+                    }
+                    let _ = responder.send(result.map_err(|err| err.to_string()));
+                }
+                None => {
+                    if let Err(err) = result {
+                        if is_user_action {
+                            let _ = event_tx.send(NetworkEvent::Error {
+                                context: context_label.to_owned(),
+                                error_message: err.to_string(),
+                            });
+                        } else {
+                            tracing::warn!(
+                                "background network command failed ({context_label}): {err:#}"
+                            );
+                        }
+                    }
                 }
             }
         });

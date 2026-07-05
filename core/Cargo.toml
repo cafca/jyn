@@ -8,6 +8,10 @@ license = "MIT OR Apache-2.0"
 [lib]
 crate-type = ["lib", "staticlib", "cdylib"]
 
+[lints.rust]
+# flutter_rust_bridge's attribute macro probes this cfg during codegen.
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(frb_expand)"] }
+
 [dependencies]
 # p2panda crates are tracked from the `port-blobs-to-net-v0.5` branch until a
 # release carrying these APIs is published to crates.io.

@@ -3,12 +3,22 @@
 
 // ignore_for_file: unused_import, unused_element, unnecessary_import, duplicate_ignore, invalid_use_of_internal_member, annotate_overrides, non_constant_identifier_names, curly_braces_in_flow_control_structures, prefer_const_literals_to_create_immutables, unused_field
 
-import 'api/simple.dart';
+import 'api/commands.dart';
+import 'api/lifecycle.dart';
+import 'api/media.dart';
+import 'api/settings.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi' as ffi;
+import 'diagnostics.dart';
+import 'domain.dart';
 import 'frb_generated.dart';
+import 'media.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated_io.dart';
+import 'profile.dart';
+import 'runtime.dart';
+import 'settings.dart';
+import 'state.dart';
 
 abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   RustLibApiImplPlatform({
@@ -19,10 +29,160 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   });
 
   @protected
+  AnyhowException dco_decode_AnyhowException(dynamic raw);
+
+  @protected
+  RustStreamSink<JynEvent> dco_decode_StreamSink_jyn_event_Sse(dynamic raw);
+
+  @protected
   String dco_decode_String(dynamic raw);
 
   @protected
+  bool dco_decode_bool(dynamic raw);
+
+  @protected
+  DiagnosticsSnapshot dco_decode_box_autoadd_diagnostics_snapshot(dynamic raw);
+
+  @protected
+  int dco_decode_box_autoadd_u_32(dynamic raw);
+
+  @protected
+  BigInt dco_decode_box_autoadd_u_64(dynamic raw);
+
+  @protected
+  UserProfile dco_decode_box_autoadd_user_profile(dynamic raw);
+
+  @protected
+  ConnectionHistoryEntry dco_decode_connection_history_entry(dynamic raw);
+
+  @protected
+  DiagnosticErrorEntry dco_decode_diagnostic_error_entry(dynamic raw);
+
+  @protected
+  DiagnosticsSnapshot dco_decode_diagnostics_snapshot(dynamic raw);
+
+  @protected
+  FriendEntry dco_decode_friend_entry(dynamic raw);
+
+  @protected
+  GhostCard dco_decode_ghost_card(dynamic raw);
+
+  @protected
+  GossipTopicSnapshot dco_decode_gossip_topic_snapshot(dynamic raw);
+
+  @protected
+  int dco_decode_i_32(dynamic raw);
+
+  @protected
+  JynEvent dco_decode_jyn_event(dynamic raw);
+
+  @protected
+  List<String> dco_decode_list_String(dynamic raw);
+
+  @protected
+  List<ConnectionHistoryEntry> dco_decode_list_connection_history_entry(
+    dynamic raw,
+  );
+
+  @protected
+  List<DiagnosticErrorEntry> dco_decode_list_diagnostic_error_entry(
+    dynamic raw,
+  );
+
+  @protected
+  List<FriendEntry> dco_decode_list_friend_entry(dynamic raw);
+
+  @protected
+  List<GhostCard> dco_decode_list_ghost_card(dynamic raw);
+
+  @protected
+  List<GossipTopicSnapshot> dco_decode_list_gossip_topic_snapshot(dynamic raw);
+
+  @protected
+  List<MediaAttachment> dco_decode_list_media_attachment(dynamic raw);
+
+  @protected
+  List<MediaDraftInput> dco_decode_list_media_draft_input(dynamic raw);
+
+  @protected
+  List<PeerSnapshot> dco_decode_list_peer_snapshot(dynamic raw);
+
+  @protected
+  List<PendingFriendRequest> dco_decode_list_pending_friend_request(
+    dynamic raw,
+  );
+
+  @protected
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
+
+  @protected
+  List<RiverComment> dco_decode_list_river_comment(dynamic raw);
+
+  @protected
+  List<RiverHeart> dco_decode_list_river_heart(dynamic raw);
+
+  @protected
+  List<RiverPost> dco_decode_list_river_post(dynamic raw);
+
+  @protected
+  MediaAttachment dco_decode_media_attachment(dynamic raw);
+
+  @protected
+  MediaDraftInput dco_decode_media_draft_input(dynamic raw);
+
+  @protected
+  MediaKind dco_decode_media_kind(dynamic raw);
+
+  @protected
+  NodeIdentitySnapshot dco_decode_node_identity_snapshot(dynamic raw);
+
+  @protected
+  String? dco_decode_opt_String(dynamic raw);
+
+  @protected
+  int? dco_decode_opt_box_autoadd_u_32(dynamic raw);
+
+  @protected
+  BigInt? dco_decode_opt_box_autoadd_u_64(dynamic raw);
+
+  @protected
+  Uint8List? dco_decode_opt_list_prim_u_8_strict(dynamic raw);
+
+  @protected
+  PeerConnectionState dco_decode_peer_connection_state(dynamic raw);
+
+  @protected
+  PeerDiscoveryMethod dco_decode_peer_discovery_method(dynamic raw);
+
+  @protected
+  PeerSnapshot dco_decode_peer_snapshot(dynamic raw);
+
+  @protected
+  PendingFriendRequest dco_decode_pending_friend_request(dynamic raw);
+
+  @protected
+  ReducedPost dco_decode_reduced_post(dynamic raw);
+
+  @protected
+  RelayMode dco_decode_relay_mode(dynamic raw);
+
+  @protected
+  RiverComment dco_decode_river_comment(dynamic raw);
+
+  @protected
+  RiverHeart dco_decode_river_heart(dynamic raw);
+
+  @protected
+  RiverPost dco_decode_river_post(dynamic raw);
+
+  @protected
+  SettingsView dco_decode_settings_view(dynamic raw);
+
+  @protected
+  int dco_decode_u_32(dynamic raw);
+
+  @protected
+  BigInt dco_decode_u_64(dynamic raw);
 
   @protected
   int dco_decode_u_8(dynamic raw);
@@ -31,10 +191,202 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void dco_decode_unit(dynamic raw);
 
   @protected
+  UserProfile dco_decode_user_profile(dynamic raw);
+
+  @protected
+  BigInt dco_decode_usize(dynamic raw);
+
+  @protected
+  Visibility dco_decode_visibility(dynamic raw);
+
+  @protected
+  WavSummary dco_decode_wav_summary(dynamic raw);
+
+  @protected
+  AnyhowException sse_decode_AnyhowException(SseDeserializer deserializer);
+
+  @protected
+  RustStreamSink<JynEvent> sse_decode_StreamSink_jyn_event_Sse(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   String sse_decode_String(SseDeserializer deserializer);
 
   @protected
+  bool sse_decode_bool(SseDeserializer deserializer);
+
+  @protected
+  DiagnosticsSnapshot sse_decode_box_autoadd_diagnostics_snapshot(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  int sse_decode_box_autoadd_u_32(SseDeserializer deserializer);
+
+  @protected
+  BigInt sse_decode_box_autoadd_u_64(SseDeserializer deserializer);
+
+  @protected
+  UserProfile sse_decode_box_autoadd_user_profile(SseDeserializer deserializer);
+
+  @protected
+  ConnectionHistoryEntry sse_decode_connection_history_entry(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  DiagnosticErrorEntry sse_decode_diagnostic_error_entry(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  DiagnosticsSnapshot sse_decode_diagnostics_snapshot(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  FriendEntry sse_decode_friend_entry(SseDeserializer deserializer);
+
+  @protected
+  GhostCard sse_decode_ghost_card(SseDeserializer deserializer);
+
+  @protected
+  GossipTopicSnapshot sse_decode_gossip_topic_snapshot(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  int sse_decode_i_32(SseDeserializer deserializer);
+
+  @protected
+  JynEvent sse_decode_jyn_event(SseDeserializer deserializer);
+
+  @protected
+  List<String> sse_decode_list_String(SseDeserializer deserializer);
+
+  @protected
+  List<ConnectionHistoryEntry> sse_decode_list_connection_history_entry(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<DiagnosticErrorEntry> sse_decode_list_diagnostic_error_entry(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<FriendEntry> sse_decode_list_friend_entry(SseDeserializer deserializer);
+
+  @protected
+  List<GhostCard> sse_decode_list_ghost_card(SseDeserializer deserializer);
+
+  @protected
+  List<GossipTopicSnapshot> sse_decode_list_gossip_topic_snapshot(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<MediaAttachment> sse_decode_list_media_attachment(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<MediaDraftInput> sse_decode_list_media_draft_input(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<PeerSnapshot> sse_decode_list_peer_snapshot(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<PendingFriendRequest> sse_decode_list_pending_friend_request(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
+
+  @protected
+  List<RiverComment> sse_decode_list_river_comment(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<RiverHeart> sse_decode_list_river_heart(SseDeserializer deserializer);
+
+  @protected
+  List<RiverPost> sse_decode_list_river_post(SseDeserializer deserializer);
+
+  @protected
+  MediaAttachment sse_decode_media_attachment(SseDeserializer deserializer);
+
+  @protected
+  MediaDraftInput sse_decode_media_draft_input(SseDeserializer deserializer);
+
+  @protected
+  MediaKind sse_decode_media_kind(SseDeserializer deserializer);
+
+  @protected
+  NodeIdentitySnapshot sse_decode_node_identity_snapshot(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  String? sse_decode_opt_String(SseDeserializer deserializer);
+
+  @protected
+  int? sse_decode_opt_box_autoadd_u_32(SseDeserializer deserializer);
+
+  @protected
+  BigInt? sse_decode_opt_box_autoadd_u_64(SseDeserializer deserializer);
+
+  @protected
+  Uint8List? sse_decode_opt_list_prim_u_8_strict(SseDeserializer deserializer);
+
+  @protected
+  PeerConnectionState sse_decode_peer_connection_state(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  PeerDiscoveryMethod sse_decode_peer_discovery_method(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  PeerSnapshot sse_decode_peer_snapshot(SseDeserializer deserializer);
+
+  @protected
+  PendingFriendRequest sse_decode_pending_friend_request(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  ReducedPost sse_decode_reduced_post(SseDeserializer deserializer);
+
+  @protected
+  RelayMode sse_decode_relay_mode(SseDeserializer deserializer);
+
+  @protected
+  RiverComment sse_decode_river_comment(SseDeserializer deserializer);
+
+  @protected
+  RiverHeart sse_decode_river_heart(SseDeserializer deserializer);
+
+  @protected
+  RiverPost sse_decode_river_post(SseDeserializer deserializer);
+
+  @protected
+  SettingsView sse_decode_settings_view(SseDeserializer deserializer);
+
+  @protected
+  int sse_decode_u_32(SseDeserializer deserializer);
+
+  @protected
+  BigInt sse_decode_u_64(SseDeserializer deserializer);
 
   @protected
   int sse_decode_u_8(SseDeserializer deserializer);
@@ -43,13 +395,145 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_decode_unit(SseDeserializer deserializer);
 
   @protected
-  int sse_decode_i_32(SseDeserializer deserializer);
+  UserProfile sse_decode_user_profile(SseDeserializer deserializer);
 
   @protected
-  bool sse_decode_bool(SseDeserializer deserializer);
+  BigInt sse_decode_usize(SseDeserializer deserializer);
+
+  @protected
+  Visibility sse_decode_visibility(SseDeserializer deserializer);
+
+  @protected
+  WavSummary sse_decode_wav_summary(SseDeserializer deserializer);
+
+  @protected
+  void sse_encode_AnyhowException(
+    AnyhowException self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_StreamSink_jyn_event_Sse(
+    RustStreamSink<JynEvent> self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_String(String self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_bool(bool self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_box_autoadd_diagnostics_snapshot(
+    DiagnosticsSnapshot self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_box_autoadd_u_32(int self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_box_autoadd_u_64(BigInt self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_box_autoadd_user_profile(
+    UserProfile self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_connection_history_entry(
+    ConnectionHistoryEntry self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_diagnostic_error_entry(
+    DiagnosticErrorEntry self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_diagnostics_snapshot(
+    DiagnosticsSnapshot self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_friend_entry(FriendEntry self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_ghost_card(GhostCard self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_gossip_topic_snapshot(
+    GossipTopicSnapshot self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_i_32(int self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_jyn_event(JynEvent self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_list_String(List<String> self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_list_connection_history_entry(
+    List<ConnectionHistoryEntry> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_diagnostic_error_entry(
+    List<DiagnosticErrorEntry> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_friend_entry(
+    List<FriendEntry> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_ghost_card(
+    List<GhostCard> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_gossip_topic_snapshot(
+    List<GossipTopicSnapshot> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_media_attachment(
+    List<MediaAttachment> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_media_draft_input(
+    List<MediaDraftInput> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_peer_snapshot(
+    List<PeerSnapshot> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_pending_friend_request(
+    List<PendingFriendRequest> self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_list_prim_u_8_strict(
@@ -58,16 +542,121 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_river_comment(
+    List<RiverComment> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_river_heart(
+    List<RiverHeart> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_river_post(
+    List<RiverPost> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_media_attachment(
+    MediaAttachment self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_media_draft_input(
+    MediaDraftInput self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_media_kind(MediaKind self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_node_identity_snapshot(
+    NodeIdentitySnapshot self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_opt_String(String? self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_opt_box_autoadd_u_32(int? self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_opt_box_autoadd_u_64(BigInt? self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_opt_list_prim_u_8_strict(
+    Uint8List? self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_peer_connection_state(
+    PeerConnectionState self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_peer_discovery_method(
+    PeerDiscoveryMethod self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_peer_snapshot(PeerSnapshot self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_pending_friend_request(
+    PendingFriendRequest self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_reduced_post(ReducedPost self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_relay_mode(RelayMode self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_river_comment(RiverComment self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_river_heart(RiverHeart self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_river_post(RiverPost self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_settings_view(SettingsView self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_u_32(int self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_u_64(BigInt self, SseSerializer serializer);
+
+  @protected
   void sse_encode_u_8(int self, SseSerializer serializer);
 
   @protected
   void sse_encode_unit(void self, SseSerializer serializer);
 
   @protected
-  void sse_encode_i_32(int self, SseSerializer serializer);
+  void sse_encode_user_profile(UserProfile self, SseSerializer serializer);
 
   @protected
-  void sse_encode_bool(bool self, SseSerializer serializer);
+  void sse_encode_usize(BigInt self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_visibility(Visibility self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_wav_summary(WavSummary self, SseSerializer serializer);
 }
 
 // Section: wire_class
