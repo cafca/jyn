@@ -159,12 +159,10 @@ class _VoiceNotePlayerState extends State<VoiceNotePlayer> {
                 return LayoutBuilder(
                   builder: (context, constraints) => GestureDetector(
                     behavior: HitTestBehavior.opaque,
-                    onTapDown: (details) => _seek(
-                      details.localPosition.dx / constraints.maxWidth,
-                    ),
-                    onHorizontalDragUpdate: (details) => _seek(
-                      details.localPosition.dx / constraints.maxWidth,
-                    ),
+                    onTapDown: (details) =>
+                        _seek(details.localPosition.dx / constraints.maxWidth),
+                    onHorizontalDragUpdate: (details) =>
+                        _seek(details.localPosition.dx / constraints.maxWidth),
                     child: CustomPaint(
                       painter: _WaveformPainter(
                         peaks: waveform,
