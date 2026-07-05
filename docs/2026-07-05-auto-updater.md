@@ -97,3 +97,22 @@ build, so verify end-to-end at least once:
 
 For faster iteration you can point `SUFeedURL` at a local file server serving a
 test appcast instead of GitHub Pages.
+
+## Gotcha: "Apple could not verify …" after a manual download
+
+If a freshly downloaded build is rejected by Gatekeeper with *"Apple could not
+verify 'jyn.app' is free of malware"* and `spctl -a -vvv -t exec` reports
+**"unsealed contents present in the root directory of an embedded framework"**,
+the app itself is fine — extracting the zip (with `unzip` or some browsers)
+externalized extended attributes into `._*` AppleDouble sidecars inside the
+framework roots, breaking the seal. Clean them and it verifies again:
+
+```
+dot_clean -m /Applications/jyn.app   # removes the ._* sidecars
+spctl -a -vvv -t exec /Applications/jyn.app   # -> accepted, Notarized Developer ID
+```
+
+`release.sh` guards against this by stripping xattrs before signing
+(`xattr -cr`) and archiving with `ditto --noextattr --norsrc`, so any extraction
+tool stays clean. Sparkle's own update unarchiver already handles this, so the
+auto-update path is unaffected — it only bit the first manual install.

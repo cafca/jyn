@@ -48,7 +48,13 @@ python3 scripts/release_tools.py sync-pubspec "$SEMVER" "$BUILD" app/pubspec.yam
 # 2. Build the release app (cargokit compiles the Rust core).
 (cd app && flutter build macos --release)
 
-# 3. Re-sign with Developer ID + hardened runtime (Sparkle's XPC helpers too).
+# 3. Strip extended attributes / AppleDouble sidecars first: otherwise archiving
+#    can externalize them into ._* files that reappear on extraction inside the
+#    framework roots, which breaks the code seal ("unsealed contents present in
+#    the root directory of an embedded framework"). Then re-sign with Developer
+#    ID + hardened runtime.
+dot_clean -m "$APP" 2>/dev/null || true
+xattr -cr "$APP"
 codesign --force --deep --options runtime --timestamp \
   --sign "$DEVELOPER_ID" "$APP"
 codesign --verify --deep --strict --verbose=2 "$APP"
@@ -56,13 +62,13 @@ codesign --verify --deep --strict --verbose=2 "$APP"
 # 4. Zip, notarize, staple.
 mkdir -p "$DIST"
 rm -f "$ZIP"
-/usr/bin/ditto -c -k --keepParent "$APP" "$ZIP"
+/usr/bin/ditto -c -k --keepParent --noextattr --norsrc "$APP" "$ZIP"
 echo "==> Notarizing (this can take a few minutes)…"
 xcrun notarytool submit "$ZIP" --keychain-profile "$NOTARY_PROFILE" --wait
 xcrun stapler staple "$APP"
 # Re-zip so the distributed archive carries the stapled ticket.
 rm -f "$ZIP"
-/usr/bin/ditto -c -k --keepParent "$APP" "$ZIP"
+/usr/bin/ditto -c -k --keepParent --noextattr --norsrc "$APP" "$ZIP"
 
 # 5. Sparkle EdDSA signature over the final archive.
 SIGN_OUT="$(cd app && dart run auto_updater:sign_update "$ZIP")"
