@@ -36,7 +36,7 @@ class RiverComment {
   final String commenterProfileId;
   final String commenterDisplayName;
   final String body;
-  final BigInt createdAt;
+  final int createdAt;
 
   const RiverComment({
     required this.commenterProfileId,

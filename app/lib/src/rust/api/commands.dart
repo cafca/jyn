@@ -14,7 +14,7 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 Future<void> publishPost({
   required String body,
   required Visibility visibility,
-  BigInt? lifetimeSecs,
+  int? lifetimeSecs,
   required List<MediaDraftInput> media,
 }) => RustLib.instance.api.crateApiCommandsPublishPost(
   body: body,
@@ -30,7 +30,7 @@ Future<void> deletePost({required String postId}) =>
     RustLib.instance.api.crateApiCommandsDeletePost(postId: postId);
 
 /// Promote to permanent (`None`) or let it go again (`Some(unix_secs)`).
-Future<void> setPostLifetime({required String postId, BigInt? expiresAt}) =>
+Future<void> setPostLifetime({required String postId, int? expiresAt}) =>
     RustLib.instance.api.crateApiCommandsSetPostLifetime(
       postId: postId,
       expiresAt: expiresAt,
@@ -40,7 +40,7 @@ Future<void> updateProfile({
   required String displayName,
   required String bio,
   required Visibility defaultVisibility,
-  BigInt? defaultLifetimeSecs,
+  int? defaultLifetimeSecs,
   required bool markOnboarded,
 }) => RustLib.instance.api.crateApiCommandsUpdateProfile(
   displayName: displayName,
@@ -126,7 +126,7 @@ Future<void> releaseKeep({
 /// leave them empty. The media kind is derived from the file extension.
 class MediaDraftInput {
   final String path;
-  final BigInt? durationMs;
+  final int? durationMs;
   final Uint8List? waveform;
 
   const MediaDraftInput({required this.path, this.durationMs, this.waveform});

@@ -11,11 +11,11 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 class MediaAttachment {
   final MediaKind kind;
   final String blobHash;
-  final BigInt byteLen;
+  final int byteLen;
   final String mime;
 
   /// Duration for audio/video, so cards can render it before the blob arrives.
-  final BigInt? durationMs;
+  final int? durationMs;
 
   /// Peak buckets for audio waveforms, rendered before the blob arrives.
   final Uint8List? waveform;
@@ -72,7 +72,7 @@ class PendingFriendRequest {
   final String requesterProfileId;
   final String requesterDisplayName;
   final String? greeting;
-  final BigInt recordedAt;
+  final int recordedAt;
 
   const PendingFriendRequest({
     required this.requesterProfileId,
@@ -106,8 +106,8 @@ class ReducedPost {
   final String body;
   final List<MediaAttachment> media;
   final Visibility visibility;
-  final BigInt? expiresAt;
-  final BigInt createdAt;
+  final int? expiresAt;
+  final int createdAt;
   final bool edited;
 
   const ReducedPost({

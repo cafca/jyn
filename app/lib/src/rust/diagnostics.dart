@@ -7,11 +7,11 @@ import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 class ConnectionHistoryEntry {
-  final BigInt atUnixMs;
+  final int atUnixMs;
   final String? peerNodeId;
   final String event;
   final String detail;
-  final BigInt? establishMs;
+  final int? establishMs;
 
   const ConnectionHistoryEntry({
     required this.atUnixMs,
@@ -42,7 +42,7 @@ class ConnectionHistoryEntry {
 }
 
 class DiagnosticErrorEntry {
-  final BigInt atUnixMs;
+  final int atUnixMs;
   final String message;
 
   const DiagnosticErrorEntry({required this.atUnixMs, required this.message});
@@ -60,7 +60,7 @@ class DiagnosticErrorEntry {
 }
 
 class DiagnosticsSnapshot {
-  final BigInt capturedAtUnixMs;
+  final int capturedAtUnixMs;
   final NodeIdentitySnapshot nodeIdentity;
   final List<PeerSnapshot> peers;
   final List<ConnectionHistoryEntry> connectionHistory;
@@ -100,7 +100,7 @@ class DiagnosticsSnapshot {
 
 class GossipTopicSnapshot {
   final String topicId;
-  final BigInt peerCount;
+  final int peerCount;
 
   const GossipTopicSnapshot({required this.topicId, required this.peerCount});
 
@@ -149,7 +149,7 @@ class PeerSnapshot {
   final String nodeId;
   final PeerConnectionState state;
   final PeerDiscoveryMethod discoveredVia;
-  final BigInt? lastSeenUnixMs;
+  final int? lastSeenUnixMs;
   final int? rttMs;
 
   const PeerSnapshot({

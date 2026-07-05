@@ -15,12 +15,12 @@ class UserProfile {
   final String displayName;
   final String bio;
   final Visibility defaultVisibility;
-  final BigInt? defaultLifetimeSecs;
+  final int? defaultLifetimeSecs;
 
   /// Whether the owner has been through the first-hour flow.
   final bool onboarded;
-  final BigInt createdAt;
-  final BigInt updatedAt;
+  final int createdAt;
+  final int updatedAt;
 
   const UserProfile({
     required this.version,

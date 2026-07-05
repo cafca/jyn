@@ -8,7 +8,7 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 /// Duration and waveform peaks for a recorded voice note.
 class WavSummary {
-  final BigInt durationMs;
+  final int durationMs;
   final Uint8List waveform;
 
   const WavSummary({required this.durationMs, required this.waveform});
