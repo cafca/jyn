@@ -1,14 +1,31 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart' hide Visibility;
 import 'package:just_audio/just_audio.dart';
 
-import '../rust/domain.dart';
-
 /// A voice note: the waveform travels in the post and renders before the
-/// audio blob arrives; playback unlocks once the file is local.
+/// audio blob arrives; playback unlocks once the file is local. Drives both
+/// the composer's draft (a local `.wav`) and posted attachments (a blob from
+/// the media cache), so it takes the raw pieces rather than a whole
+/// [MediaAttachment].
 class VoiceNotePlayer extends StatefulWidget {
-  const VoiceNotePlayer({super.key, required this.attachment, this.path});
+  const VoiceNotePlayer({
+    super.key,
+    required this.waveform,
+    required this.durationMs,
+    required this.mime,
+    this.path,
+  });
 
-  final MediaAttachment attachment;
+  /// Peak buckets (0..=255), rendered before the blob arrives.
+  final List<int>? waveform;
+  final int? durationMs;
+
+  /// The audio container's mime type, used to give the player a file with a
+  /// recognisable extension (see [_playablePath]).
+  final String mime;
+
+  /// The local file, or null while the blob is still being fetched.
   final String? path;
 
   @override
@@ -24,30 +41,74 @@ class _VoiceNotePlayerState extends State<VoiceNotePlayer> {
     super.dispose();
   }
 
-  Future<void> _toggle() async {
+  /// Lazily opens the audio file — shared by play and seek, so tapping into
+  /// the waveform works before the note has ever been played. Returns null if
+  /// the blob isn't local yet or the file can't be opened.
+  Future<AudioPlayer?> _ensurePlayer() async {
+    final existing = _player;
+    if (existing != null) return existing;
     final path = widget.path;
-    if (path == null) return;
-    var player = _player;
-    if (player == null) {
-      player = AudioPlayer();
-      await player.setFilePath(path);
-      setState(() => _player = player);
+    if (path == null) return null;
+    final player = AudioPlayer();
+    try {
+      await player.setFilePath(await _playablePath(path, widget.mime));
+    } catch (error) {
+      await player.dispose();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('could not open voice note: $error')),
+        );
+      }
+      return null;
     }
-    if (player.playing) {
+    if (!mounted) {
+      await player.dispose();
+      return null;
+    }
+    setState(() => _player = player);
+    return player;
+  }
+
+  Future<void> _toggle() async {
+    final player = await _ensurePlayer();
+    if (player == null) return;
+    // just_audio keeps `playing == true` after a track ends (only
+    // processingState flips to completed), so check completion first: a tap
+    // there replays from the top rather than pausing an already-stopped note.
+    if (player.processingState == ProcessingState.completed) {
+      await player.seek(Duration.zero);
+      await player.play();
+    } else if (player.playing) {
       await player.pause();
     } else {
-      if (player.processingState == ProcessingState.completed) {
-        await player.seek(Duration.zero);
-      }
       await player.play();
     }
+  }
+
+  /// Jumps to [fraction] (0..1) of the note. Keeps playing if it was, stays
+  /// paused otherwise — a completed note becomes seekable again.
+  Future<void> _seek(double fraction) async {
+    final player = await _ensurePlayer();
+    if (player == null) return;
+    final total = _totalDuration(player);
+    if (total == null) return;
+    await player.seek(total * fraction.clamp(0.0, 1.0));
+  }
+
+  /// The note's length: the player's own duration once loaded, else the
+  /// summary that travelled with the post.
+  Duration? _totalDuration(AudioPlayer? player) {
+    final loaded = player?.duration;
+    if (loaded != null) return loaded;
+    final ms = widget.durationMs;
+    return ms != null ? Duration(milliseconds: ms) : null;
   }
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final waveform = widget.attachment.waveform ?? const <int>[];
-    final durationMs = widget.attachment.durationMs;
+    final waveform = widget.waveform ?? const <int>[];
+    final durationMs = widget.durationMs;
     final seconds = durationMs != null ? (durationMs / 1000).round() : null;
 
     return Container(
@@ -62,7 +123,12 @@ class _VoiceNotePlayerState extends State<VoiceNotePlayer> {
           StreamBuilder<PlayerState>(
             stream: _player?.playerStateStream,
             builder: (context, snapshot) {
-              final playing = snapshot.data?.playing ?? false;
+              final state = snapshot.data;
+              // A finished note reports playing == true; show it as paused so
+              // the button invites a replay.
+              final playing =
+                  (state?.playing ?? false) &&
+                  state?.processingState != ProcessingState.completed;
               final fetching = widget.path == null;
               return IconButton(
                 visualDensity: VisualDensity.compact,
@@ -82,8 +148,36 @@ class _VoiceNotePlayerState extends State<VoiceNotePlayer> {
           SizedBox(
             width: 120,
             height: 28,
-            child: CustomPaint(
-              painter: _WaveformPainter(peaks: waveform, color: scheme.primary),
+            child: StreamBuilder<Duration>(
+              stream: _player?.positionStream,
+              builder: (context, snapshot) {
+                final position = snapshot.data ?? Duration.zero;
+                final total = _totalDuration(_player);
+                final progress = (total != null && total.inMilliseconds > 0)
+                    ? position.inMilliseconds / total.inMilliseconds
+                    : 0.0;
+                return LayoutBuilder(
+                  builder: (context, constraints) => GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTapDown: (details) => _seek(
+                      details.localPosition.dx / constraints.maxWidth,
+                    ),
+                    onHorizontalDragUpdate: (details) => _seek(
+                      details.localPosition.dx / constraints.maxWidth,
+                    ),
+                    child: CustomPaint(
+                      painter: _WaveformPainter(
+                        peaks: waveform,
+                        progress: progress.clamp(0.0, 1.0),
+                        playedColor: scheme.primary,
+                        unplayedColor: scheme.onSurfaceVariant.withValues(
+                          alpha: 0.4,
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              },
             ),
           ),
           if (seconds != null)
@@ -100,21 +194,63 @@ class _VoiceNotePlayerState extends State<VoiceNotePlayer> {
   }
 }
 
-/// Peak buckets (0..=255) as centered vertical bars.
+/// just_audio infers the audio container from the file extension on Apple
+/// platforms (AVFoundation), but the media cache is content-addressed with no
+/// extension — feeding it directly throws `(-11828) Cannot Open`. Hand the
+/// player a symlink that carries an extension derived from the mime type;
+/// paths that already have the right one (drafts, `voice-note.wav`) pass
+/// through untouched.
+Future<String> _playablePath(String path, String mime) async {
+  final ext = _audioExtension(mime);
+  if (ext.isEmpty || path.toLowerCase().endsWith(ext)) return path;
+  final dir = await Directory.systemTemp.createTemp('jyn-audio');
+  final linkPath = '${dir.path}/voice-note$ext';
+  try {
+    await Link(linkPath).create(path);
+  } on FileSystemException {
+    // Symlinks can be unavailable (e.g. unprivileged Windows); copy instead.
+    await File(path).copy(linkPath);
+  }
+  return linkPath;
+}
+
+String _audioExtension(String mime) => switch (mime) {
+  'audio/wav' || 'audio/x-wav' || 'audio/wave' => '.wav',
+  'audio/mpeg' || 'audio/mp3' => '.mp3',
+  'audio/mp4' || 'audio/aac' || 'audio/x-m4a' => '.m4a',
+  'audio/flac' || 'audio/x-flac' => '.flac',
+  'audio/ogg' || 'audio/opus' => '.ogg',
+  _ => '',
+};
+
+/// Peak buckets (0..=255) as centered vertical bars. Bars left of [progress]
+/// (0..1) are drawn played, the rest dimmed — a playback fill.
 class _WaveformPainter extends CustomPainter {
-  const _WaveformPainter({required this.peaks, required this.color});
+  const _WaveformPainter({
+    required this.peaks,
+    required this.progress,
+    required this.playedColor,
+    required this.unplayedColor,
+  });
 
   final List<int> peaks;
-  final Color color;
+  final double progress;
+  final Color playedColor;
+  final Color unplayedColor;
 
   @override
   void paint(Canvas canvas, Size size) {
     if (peaks.isEmpty) return;
-    final paint = Paint()
-      ..color = color
+    final played = Paint()
+      ..color = playedColor
+      ..strokeWidth = 3
+      ..strokeCap = StrokeCap.round;
+    final unplayed = Paint()
+      ..color = unplayedColor
       ..strokeWidth = 3
       ..strokeCap = StrokeCap.round;
     final step = size.width / peaks.length;
+    final playedWidth = size.width * progress;
     for (final (index, peak) in peaks.indexed) {
       final x = step * index + step / 2;
       final magnitude = (peak / 255) * (size.height / 2 - 2);
@@ -122,12 +258,15 @@ class _WaveformPainter extends CustomPainter {
       canvas.drawLine(
         Offset(x, size.height / 2 - half),
         Offset(x, size.height / 2 + half),
-        paint,
+        x <= playedWidth ? played : unplayed,
       );
     }
   }
 
   @override
   bool shouldRepaint(_WaveformPainter oldDelegate) =>
-      oldDelegate.peaks != peaks || oldDelegate.color != color;
+      oldDelegate.peaks != peaks ||
+      oldDelegate.progress != progress ||
+      oldDelegate.playedColor != playedColor ||
+      oldDelegate.unplayedColor != unplayedColor;
 }

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart' hide Visibility;
@@ -24,14 +25,21 @@ class _VoiceRecorderButtonState extends State<VoiceRecorderButton> {
   bool _recording = false;
   String? _micError;
 
+  /// Wall-clock length of the take in progress, surfaced next to the button.
+  final _elapsed = Stopwatch();
+  Timer? _ticker;
+
   @override
   void dispose() {
+    _ticker?.cancel();
     _recorder.dispose();
     super.dispose();
   }
 
   Future<void> _toggle() async {
     if (_recording) {
+      _ticker?.cancel();
+      _elapsed.stop();
       final path = await _recorder.stop();
       setState(() => _recording = false);
       if (path == null) return;
@@ -68,6 +76,12 @@ class _VoiceRecorderButtonState extends State<VoiceRecorderButton> {
         ),
         path: '${dir.path}/voice-note.wav',
       );
+      _elapsed
+        ..reset()
+        ..start();
+      _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
+        if (mounted) setState(() {});
+      });
       setState(() {
         _recording = true;
         _micError = null;
@@ -80,7 +94,7 @@ class _VoiceRecorderButtonState extends State<VoiceRecorderButton> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return IconButton(
+    final button = IconButton(
       tooltip:
           _micError ?? (_recording ? 'stop recording' : 'record a voice note'),
       onPressed: _micError != null && !_recording ? null : _toggle,
@@ -93,6 +107,22 @@ class _VoiceRecorderButtonState extends State<VoiceRecorderButton> {
             : Icons.mic_none,
         color: _recording ? scheme.error : null,
       ),
+    );
+    if (!_recording) return button;
+
+    final secs = _elapsed.elapsed.inSeconds;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          '${secs ~/ 60}:${(secs % 60).toString().padLeft(2, '0')}',
+          style: Theme.of(context).textTheme.labelMedium?.copyWith(
+            color: scheme.error,
+            fontFeatures: const [FontFeature.tabularFigures()],
+          ),
+        ),
+        button,
+      ],
     );
   }
 }
