@@ -42,6 +42,16 @@ Rust tests: `cargo test` (repo root). Dart tests: `flutter test` in `app/`.
 After changing the API surface in `core/src/api/`, regenerate bindings with
 `flutter_rust_bridge_codegen generate` in `app/`.
 
+## Releases & updates
+
+The macOS app updates itself via Sparkle: it checks the appcast on launch and
+daily, and offers an "Check for Updates…" item in the app menu. Releases are
+cut locally with `scripts/release.sh` (build → notarize → EdDSA-sign →
+appcast → GitHub Release), driven by the repo-root `VERSION` file. See
+[docs/2026-07-05-auto-updater.md](docs/2026-07-05-auto-updater.md) for the
+one-time signing setup and the release runbook. iOS/Android update through
+their app stores; Linux/Windows backends come with those ports.
+
 ## What it does
 
 - **One post type.** Lifetime (ephemeral with a visible countdown, or

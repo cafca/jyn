@@ -30,5 +30,20 @@
 	<string>jyn records voice notes for your posts.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<!-- Sparkle auto-updater (via the auto_updater plugin). -->
+	<key>SUFeedURL</key>
+	<string>https://cafca.github.io/jyn/appcast.xml</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUScheduledCheckInterval</key>
+	<integer>86400</integer>
+	<!-- ed25519 public key; the private half lives in the release machine's
+	     Keychain. Generate with `dart run auto_updater:generate_keys`. -->
+	<key>SUPublicEDKey</key>
+	<string>saAnM/kncyU6BcXyI2BWdSVjK+4zPbilkwIKZorfRos=</string>
+	<!-- Install updates from within the App Sandbox via Sparkle's XPC service
+	     (paired with the mach-lookup exceptions in Release.entitlements). -->
+	<key>SUEnableInstallerLauncherService</key>
+	<true/>
 </dict>
 </plist>

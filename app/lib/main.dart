@@ -1,6 +1,8 @@
 import 'dart:io';
 
+import 'package:auto_updater/auto_updater.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
     show ExternalLibrary, ExternalLibraryLoaderConfig, loadExternalLibrary;
@@ -14,8 +16,31 @@ import 'src/screens/onboarding_screen.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await RustLib.init(externalLibrary: await _loadCore());
+  await _initAutoUpdater();
   await startNode();
   runApp(const ProviderScope(child: JynApp()));
+}
+
+/// Sparkle appcast, served from GitHub Pages and refreshed on every release.
+const _updateFeedUrl = 'https://cafca.github.io/jyn/appcast.xml';
+
+/// Bridges the native "Check for Updates…" menu item (see MainFlutterWindow)
+/// to the Dart-side updater.
+const _updaterChannel = MethodChannel('land.jyn.jyn/updater');
+
+/// Wires up automatic (on-launch + daily) update checks and the manual menu
+/// item. Only macOS ships an updater today; other desktops arrive with their
+/// ports, and mobile updates through the app stores.
+Future<void> _initAutoUpdater() async {
+  if (!Platform.isMacOS) return;
+  await autoUpdater.setFeedURL(_updateFeedUrl);
+  await autoUpdater.setScheduledCheckInterval(86400);
+  _updaterChannel.setMethodCallHandler((call) async {
+    if (call.method == 'checkForUpdates') {
+      await autoUpdater.checkForUpdates();
+    }
+    return null;
+  });
 }
 
 /// On Apple platforms the Rust symbols are linked into the pod's framework,
