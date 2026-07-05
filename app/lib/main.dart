@@ -1,5 +1,9 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
+    show ExternalLibrary, ExternalLibraryLoaderConfig, loadExternalLibrary;
 
 import 'src/providers.dart';
 import 'src/rust/api/lifecycle.dart';
@@ -9,9 +13,21 @@ import 'src/screens/onboarding_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await RustLib.init();
+  await RustLib.init(externalLibrary: await _loadCore());
   await startNode();
   runApp(const ProviderScope(child: JynApp()));
+}
+
+/// On Apple platforms the Rust symbols are linked into the pod's framework,
+/// which is named after the pub package (rust_lib_jyn) — not the crate name
+/// the generated loader assumes. Elsewhere the default (libjyn) is correct.
+Future<ExternalLibrary?> _loadCore() async {
+  if (!Platform.isMacOS && !Platform.isIOS) return null;
+  return loadExternalLibrary(const ExternalLibraryLoaderConfig(
+    stem: 'rust_lib_jyn',
+    ioDirectory: '../core/target/release/',
+    webPrefix: null,
+  ));
 }
 
 class JynApp extends StatefulWidget {
