@@ -103,6 +103,15 @@ class _PostCardState extends ConsumerState<PostCard> {
 
   // ---- author row -----------------------------------------------------
 
+  void _openAuthorProfile() {
+    openUserProfile(
+      context,
+      ref,
+      profileId: post.authorProfileId,
+      displayName: post.authorDisplayName,
+    );
+  }
+
   Widget _authorRow({required bool hasVisualMedia}) {
     return Row(
       children: [
@@ -111,13 +120,20 @@ class _PostCardState extends ConsumerState<PostCard> {
           displayName: post.authorDisplayName,
           size: 36,
           isSelf: post.isSelf,
+          onTap: _openAuthorProfile,
         ),
         const SizedBox(width: 10),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(post.authorDisplayName, style: JynType.name),
+              MouseRegion(
+                cursor: SystemMouseCursors.click,
+                child: GestureDetector(
+                  onTap: _openAuthorProfile,
+                  child: Text(post.authorDisplayName, style: JynType.name),
+                ),
+              ),
               const SizedBox(height: 1),
               _MetaLine(post: post),
             ],
@@ -314,16 +330,31 @@ class _PostCardState extends ConsumerState<PostCard> {
             for (final heart in post.hearts)
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 4),
-                child: Row(
-                  children: [
-                    JynAvatar(
-                      profileId: heart.hearterProfileId,
-                      displayName: heart.hearterDisplayName,
-                      size: 26,
+                child: MouseRegion(
+                  cursor: SystemMouseCursors.click,
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      openUserProfile(
+                        this.context,
+                        ref,
+                        profileId: heart.hearterProfileId,
+                        displayName: heart.hearterDisplayName,
+                      );
+                    },
+                    child: Row(
+                      children: [
+                        JynAvatar(
+                          profileId: heart.hearterProfileId,
+                          displayName: heart.hearterDisplayName,
+                          size: 26,
+                        ),
+                        const SizedBox(width: 8),
+                        Text(heart.hearterDisplayName, style: JynType.body),
+                      ],
                     ),
-                    const SizedBox(width: 8),
-                    Text(heart.hearterDisplayName, style: JynType.body),
-                  ],
+                  ),
                 ),
               ),
           ],
@@ -416,7 +447,12 @@ class _PostCardState extends ConsumerState<PostCard> {
         onTap: () => controller.isOpen ? controller.close() : controller.open(),
       ),
       menuChildren: [
-        MenuItemButton(onPressed: _editDialog, child: const Text('edit')),
+        MenuItemButton(
+          // Editing happens in the composer, not a dialog.
+          onPressed: () =>
+              ref.read(editingPostProvider.notifier).start(post.post),
+          child: const Text('edit'),
+        ),
         if (ephemeral)
           MenuItemButton(
             onPressed: () => runGuarded(
@@ -451,39 +487,6 @@ class _PostCardState extends ConsumerState<PostCard> {
         ),
       ],
     );
-  }
-
-  Future<void> _editDialog() async {
-    final controller = TextEditingController(text: post.post.body);
-    final body = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: JynColors.body,
-        title: const Text('edit post'),
-        content: TextField(
-          controller: controller,
-          maxLines: 6,
-          minLines: 2,
-          cursorColor: JynColors.leaf,
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, controller.text),
-            child: const Text('save (marked as edited)'),
-          ),
-        ],
-      ),
-    );
-    if (body != null && body.trim().isNotEmpty && mounted) {
-      await runGuarded(
-        context,
-        () => editPost(postId: post.post.postId, body: body.trim()),
-      );
-    }
   }
 
   Future<void> _confirmDelete() async {

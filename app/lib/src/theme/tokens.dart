@@ -213,18 +213,43 @@ ThemeData jynTheme() {
     splashFactory: NoSplash.splashFactory,
     highlightColor: Colors.transparent,
     hoverColor: JynColors.field,
+    // Screens swap instantly — no push/pop animation.
+    pageTransitionsTheme: PageTransitionsTheme(
+      builders: {
+        for (final platform in TargetPlatform.values)
+          platform: const _InstantPageTransitionsBuilder(),
+      },
+    ),
     dividerTheme: const DividerThemeData(
       color: JynColors.hairline,
       thickness: 1,
       space: 1,
     ),
-    tooltipTheme: TooltipThemeData(
-      waitDuration: const Duration(milliseconds: 350),
-      decoration: BoxDecoration(
-        color: JynColors.ink,
-        borderRadius: BorderRadius.circular(8),
-      ),
-      textStyle: const TextStyle(fontSize: 12, color: Colors.white),
-    ),
+    tooltipTheme: _tooltipTheme(),
   );
+}
+
+TooltipThemeData _tooltipTheme() {
+  return TooltipThemeData(
+    waitDuration: const Duration(milliseconds: 350),
+    decoration: BoxDecoration(
+      color: JynColors.ink,
+      borderRadius: BorderRadius.circular(8),
+    ),
+    textStyle: const TextStyle(fontSize: 12, color: Colors.white),
+  );
+}
+
+/// No route animation at all: the new screen just appears.
+class _InstantPageTransitionsBuilder extends PageTransitionsBuilder {
+  const _InstantPageTransitionsBuilder();
+
+  @override
+  Widget buildTransitions<T>(
+    PageRoute<T> route,
+    BuildContext context,
+    Animation<double> animation,
+    Animation<double> secondaryAnimation,
+    Widget child,
+  ) => child;
 }

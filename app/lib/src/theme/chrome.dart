@@ -9,21 +9,34 @@ import 'package:flutter/material.dart' hide Visibility;
 
 import 'tokens.dart';
 
-/// The 34px near-white strip the macOS traffic lights float over. The
-/// native titlebar is transparent + full-size-content (see
-/// MainFlutterWindow.swift), so this paints the design's `#f3f2ee` band
-/// with its hairline. Skipped on platforms that keep their own titlebar.
+/// The 34px strip the macOS traffic lights float over. The native titlebar
+/// is transparent + full-size-content (see MainFlutterWindow.swift), so
+/// this just reserves the height — body-colored, borderless, blending
+/// seamlessly into the window. Skipped on platforms that keep their own
+/// titlebar.
 class JynTitlebarStrip extends StatelessWidget {
   const JynTitlebarStrip({super.key});
 
   @override
   Widget build(BuildContext context) {
     if (!Platform.isMacOS) return const SizedBox.shrink();
-    return Container(
-      height: JynLayout.titlebarInset,
-      decoration: const BoxDecoration(
-        color: JynColors.titlebar,
-        border: Border(bottom: BorderSide(color: JynColors.hairline)),
+    return Container(height: JynLayout.titlebarInset, color: JynColors.body);
+  }
+}
+
+/// Constrains one scroll-list item to the 440px column while the list
+/// itself spans the window — so the scrollbar rides the window edge.
+class JynColumnItem extends StatelessWidget {
+  const JynColumnItem({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: JynLayout.column),
+        child: child,
       ),
     );
   }

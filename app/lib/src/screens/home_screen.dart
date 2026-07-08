@@ -79,43 +79,41 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           Expanded(
             child: Stack(
               children: [
+                // The list spans the window (scrollbar on the window edge);
+                // each item constrains itself to the 440px column.
                 Positioned.fill(
-                  child: Center(
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(
-                        maxWidth: JynLayout.column,
-                      ),
-                      child: ListView(
-                        controller: _scroll,
-                        // Clear the floating composer at the bottom.
-                        padding: const EdgeInsets.only(top: 2, bottom: 150),
-                        children: [
-                          if (posts.isEmpty && ghosts.isEmpty)
-                            Padding(
-                              padding: const EdgeInsets.symmetric(vertical: 64),
-                              child: Center(
-                                child: Text(
-                                  'the river is quiet',
-                                  style: JynType.body.copyWith(
-                                    color: JynColors.muted,
-                                  ),
-                                ),
+                  child: ListView(
+                    controller: _scroll,
+                    // Clear the floating composer at the bottom.
+                    padding: const EdgeInsets.only(top: 2, bottom: 150),
+                    children: [
+                      if (posts.isEmpty && ghosts.isEmpty)
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 64),
+                          child: Center(
+                            child: Text(
+                              'the river is quiet',
+                              style: JynType.body.copyWith(
+                                color: JynColors.muted,
                               ),
                             ),
-                          for (final (index, post) in posts.indexed) ...[
-                            if (index > 0) const JynHairline(faint: true),
-                            PostCard(post: post),
-                          ],
-                          for (final ghost in ghosts) ...[
-                            const JynHairline(faint: true),
-                            _GhostDoor(
-                              carrier: ghost.carrierDisplayName,
-                              authorProfileId: ghost.authorProfileId,
-                            ),
-                          ],
-                        ],
-                      ),
-                    ),
+                          ),
+                        ),
+                      for (final (index, post) in posts.indexed) ...[
+                        if (index > 0)
+                          const JynColumnItem(child: JynHairline(faint: true)),
+                        JynColumnItem(child: PostCard(post: post)),
+                      ],
+                      for (final ghost in ghosts) ...[
+                        const JynColumnItem(child: JynHairline(faint: true)),
+                        JynColumnItem(
+                          child: _GhostDoor(
+                            carrier: ghost.carrierDisplayName,
+                            authorProfileId: ghost.authorProfileId,
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
                 ),
                 // The feed dissolves under the floating pill.

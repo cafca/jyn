@@ -17,10 +17,18 @@ import 'voice_recorder.dart';
 /// grows in place into a compact card on focus — reach, lifetime scale,
 /// attachments, cast. The feed stays visible behind it.
 class Composer extends ConsumerStatefulWidget {
-  const Composer({super.key, this.startExpanded = false});
+  const Composer({
+    super.key,
+    this.startExpanded = false,
+    this.editOnly = false,
+  });
 
   /// Boot straight into the expanded card (screenshot harness only).
   final bool startExpanded;
+
+  /// Render nothing unless a post is being edited — screens without a
+  /// composer of their own (the profile) still get the edit card.
+  final bool editOnly;
 
   @override
   ConsumerState<Composer> createState() => _ComposerState();
@@ -33,6 +41,7 @@ class _ComposerState extends ConsumerState<Composer> {
   Visibility _visibility = Visibility.circles;
   int? _lifetimeSecs = 24 * 3600;
   bool _casting = false;
+  bool _reachMenuOpen = false;
   final List<MediaDraftInput> _attachments = [];
 
   @override
@@ -50,14 +59,17 @@ class _ComposerState extends ConsumerState<Composer> {
     super.dispose();
   }
 
+  ReducedPost? get _editing => ref.read(editingPostProvider);
+
   void _expand() {
     setState(() => _expanded = true);
     _focusNode.requestFocus();
   }
 
   /// Collapse only when there's nothing at stake — an in-progress draft
-  /// keeps the card open.
+  /// (or an edit in flight, or the open reach menu) keeps the card open.
   void _maybeCollapse() {
+    if (_reachMenuOpen || _editing != null) return;
     if (_body.text.trim().isEmpty && _attachments.isEmpty) {
       _focusNode.unfocus();
       if (_expanded) setState(() => _expanded = false);
@@ -70,6 +82,13 @@ class _ComposerState extends ConsumerState<Composer> {
     setState(() {
       _attachments.addAll(files.map((f) => MediaDraftInput(path: f.path)));
     });
+  }
+
+  /// The collapsed pill's paperclip: pick files, then open the card with
+  /// them staged.
+  Future<void> _attachFromPill() async {
+    await _attachFiles();
+    if (_attachments.isNotEmpty) _expand();
   }
 
   Future<void> _cast() async {
@@ -93,18 +112,52 @@ class _ComposerState extends ConsumerState<Composer> {
   bool get _canCast =>
       !_casting && (_body.text.trim().isNotEmpty || _attachments.isNotEmpty);
 
+  /// Load a post into the card for editing (or clear back out).
+  void _onEditingChanged(ReducedPost? previous, ReducedPost? next) {
+    if (next != null && next.postId != previous?.postId) {
+      _body.text = next.body;
+      setState(() => _expanded = true);
+      _focusNode.requestFocus();
+    }
+  }
+
+  void _cancelEdit() {
+    ref.read(editingPostProvider.notifier).clear();
+    _body.clear();
+    _focusNode.unfocus();
+    setState(() => _expanded = false);
+  }
+
+  Future<void> _saveEdit(ReducedPost editing) async {
+    final body = _body.text.trim();
+    if (body.isEmpty) return;
+    setState(() => _casting = true);
+    await runGuarded(
+      context,
+      () => editPost(postId: editing.postId, body: body),
+    );
+    if (!mounted) return;
+    setState(() => _casting = false);
+    _cancelEdit();
+  }
+
   @override
   Widget build(BuildContext context) {
-    final radius = _expanded ? JynRadii.sheet : JynRadii.pill;
+    ref.listen<ReducedPost?>(editingPostProvider, _onEditingChanged);
+    final editing = ref.watch(editingPostProvider);
+    if (widget.editOnly && editing == null) return const SizedBox.shrink();
+
+    final expanded = _expanded || editing != null;
+    final radius = expanded ? JynRadii.sheet : JynRadii.pill;
     return TapRegion(
       onTapOutside: (_) => _maybeCollapse(),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
         curve: Curves.easeOutCubic,
-        width: _expanded ? 452 : JynLayout.column,
+        width: expanded ? 452 : JynLayout.column,
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(radius),
-          boxShadow: _expanded
+          boxShadow: expanded
               ? JynShadows.expandedCard
               : JynShadows.floatingPill,
         ),
@@ -112,14 +165,14 @@ class _ComposerState extends ConsumerState<Composer> {
           borderRadius: BorderRadius.circular(radius),
           child: BackdropFilter(
             filter: ImageFilter.blur(
-              sigmaX: _expanded ? 14 : 12,
-              sigmaY: _expanded ? 14 : 12,
+              sigmaX: expanded ? 14 : 12,
+              sigmaY: expanded ? 14 : 12,
             ),
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 200),
               curve: Curves.easeOutCubic,
               decoration: BoxDecoration(
-                color: _expanded
+                color: expanded
                     ? JynColors.composerCardBg
                     : JynColors.composerPillBg,
                 borderRadius: BorderRadius.circular(radius),
@@ -129,11 +182,90 @@ class _ComposerState extends ConsumerState<Composer> {
                 duration: const Duration(milliseconds: 200),
                 curve: Curves.easeOutCubic,
                 alignment: Alignment.bottomCenter,
-                child: _expanded ? _card() : _pill(),
+                child: editing != null
+                    ? _editCard(editing)
+                    : expanded
+                    ? _card()
+                    : _pill(),
               ),
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  // ---- edit mode ----------------------------------------------------------
+
+  Widget _editCard(ReducedPost editing) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 13, 16, 13),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text(
+                'editing post',
+                style: JynType.body.copyWith(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const Spacer(),
+              MouseRegion(
+                cursor: SystemMouseCursors.click,
+                child: GestureDetector(
+                  onTap: _cancelEdit,
+                  child: const Icon(
+                    Icons.close,
+                    size: 17,
+                    color: JynColors.secondary,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          TextField(
+            controller: _body,
+            focusNode: _focusNode,
+            minLines: 1,
+            maxLines: 6,
+            style: JynType.body.copyWith(fontSize: 15),
+            cursorColor: JynColors.leaf,
+            cursorWidth: 2,
+            decoration: const InputDecoration(
+              isDense: true,
+              border: InputBorder.none,
+            ),
+            onTapOutside: (_) {},
+            onChanged: (_) => setState(() {}),
+          ),
+          const SizedBox(height: 10),
+          Container(height: 1, color: JynColors.hairlineFaint),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'saved edits are marked',
+                  style: JynType.body.copyWith(
+                    fontSize: 12,
+                    color: JynColors.muted,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              _primaryPill(
+                label: 'save',
+                enabled: !_casting && _body.text.trim().isNotEmpty,
+                onTap: () => _saveEdit(editing),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
@@ -159,9 +291,24 @@ class _ComposerState extends ConsumerState<Composer> {
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
-              _reachPill(interactive: false),
-              const SizedBox(width: 8),
-              const Icon(Icons.attach_file, size: 18, color: JynColors.slate),
+              Tooltip(
+                message: 'attach files',
+                child: MouseRegion(
+                  cursor: SystemMouseCursors.click,
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: _attachFromPill,
+                    child: const Padding(
+                      padding: EdgeInsets.all(4),
+                      child: Icon(
+                        Icons.attach_file,
+                        size: 18,
+                        color: JynColors.slate,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
             ],
           ),
         ),
@@ -190,7 +337,7 @@ class _ComposerState extends ConsumerState<Composer> {
                 ),
               ),
               const Spacer(),
-              _reachPill(interactive: true),
+              _reachPill(),
             ],
           ),
           const SizedBox(height: 8),
@@ -268,23 +415,26 @@ class _ComposerState extends ConsumerState<Composer> {
     );
   }
 
-  Widget _reachPill({required bool interactive}) {
-    final label = Text(
-      interactive
-          ? '${visibilityLabel(_visibility)} ▾'
-          : visibilityLabel(_visibility),
-      style: JynType.body.copyWith(fontSize: 12, color: JynColors.mid),
-    );
+  Widget _reachPill() {
     final pill = Container(
       padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
       decoration: BoxDecoration(
         color: JynColors.chipTint,
         borderRadius: BorderRadius.circular(999),
       ),
-      child: label,
+      child: Text(
+        '${visibilityLabel(_visibility)} ▾',
+        style: JynType.body.copyWith(fontSize: 12, color: JynColors.mid),
+      ),
     );
-    if (!interactive) return pill;
     return MenuAnchor(
+      // The menu overlay counts as "outside" the card's TapRegion; flag it
+      // open so picking a reach never collapses the composer.
+      onOpen: () => _reachMenuOpen = true,
+      onClose: () {
+        _reachMenuOpen = false;
+        _focusNode.requestFocus();
+      },
       builder: (context, controller, _) => MouseRegion(
         cursor: SystemMouseCursors.click,
         child: GestureDetector(
@@ -359,12 +509,19 @@ class _ComposerState extends ConsumerState<Composer> {
     );
   }
 
-  Widget _castButton() {
-    final enabled = _canCast;
+  Widget _castButton() =>
+      _primaryPill(label: 'cast', enabled: _canCast, onTap: _cast, leaf: true);
+
+  Widget _primaryPill({
+    required String label,
+    required bool enabled,
+    required VoidCallback onTap,
+    bool leaf = false,
+  }) {
     return MouseRegion(
       cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
       child: GestureDetector(
-        onTap: enabled ? _cast : null,
+        onTap: enabled ? onTap : null,
         child: AnimatedOpacity(
           duration: const Duration(milliseconds: 120),
           opacity: enabled ? 1 : 0.45,
@@ -377,12 +534,14 @@ class _ComposerState extends ConsumerState<Composer> {
             ),
             child: Row(
               mainAxisSize: MainAxisSize.min,
-              children: const [
-                Icon(Icons.eco, size: 15, color: Colors.white),
-                SizedBox(width: 6),
+              children: [
+                if (leaf) ...[
+                  const Icon(Icons.eco, size: 15, color: Colors.white),
+                  const SizedBox(width: 6),
+                ],
                 Text(
-                  'cast',
-                  style: TextStyle(
+                  label,
+                  style: const TextStyle(
                     fontSize: 13.5,
                     fontWeight: FontWeight.w600,
                     color: Colors.white,

@@ -11,6 +11,7 @@ import '../rust/profile.dart';
 import '../rust/runtime.dart';
 import '../theme/chrome.dart';
 import '../theme/tokens.dart';
+import '../widgets/composer.dart';
 import '../widgets/jyn_avatar.dart';
 import '../widgets/post_card.dart';
 import 'settings_screen.dart';
@@ -94,36 +95,51 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
             ],
           ),
           Expanded(
-            child: Center(
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: JynLayout.column),
-                child: ListView(
-                  padding: const EdgeInsets.symmetric(vertical: 22),
-                  children: [
-                    _IdentityHeader(profile: profile),
-                    const SizedBox(height: 26),
-                    _FriendsArea(friends: friends, pending: pending),
-                    const SizedBox(height: 22),
-                    const JynHairline(faint: true),
-                    if (ownPosts.isEmpty)
-                      Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 40),
-                        child: Center(
-                          child: Text(
-                            'nothing cast yet',
-                            style: JynType.body.copyWith(
-                              color: JynColors.muted,
+            child: Stack(
+              children: [
+                // Full-width list; items constrain to the 440px column.
+                Positioned.fill(
+                  child: ListView(
+                    padding: const EdgeInsets.symmetric(vertical: 22),
+                    children: [
+                      JynColumnItem(child: _IdentityHeader(profile: profile)),
+                      const SizedBox(height: 26),
+                      JynColumnItem(
+                        child: _FriendsArea(friends: friends, pending: pending),
+                      ),
+                      const SizedBox(height: 22),
+                      const JynColumnItem(child: JynHairline(faint: true)),
+                      if (ownPosts.isEmpty)
+                        JynColumnItem(
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 40),
+                            child: Center(
+                              child: Text(
+                                'nothing cast yet',
+                                style: JynType.body.copyWith(
+                                  color: JynColors.muted,
+                                ),
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                    for (final (index, post) in ownPosts.indexed) ...[
-                      if (index > 0) const JynHairline(faint: true),
-                      PostCard(post: post),
+                      for (final (index, post) in ownPosts.indexed) ...[
+                        if (index > 0)
+                          const JynColumnItem(child: JynHairline(faint: true)),
+                        JynColumnItem(child: PostCard(post: post)),
+                      ],
                     ],
-                  ],
+                  ),
                 ),
-              ),
+                // Editing a post from the stream brings up the composer's
+                // edit card here too.
+                const Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 18,
+                  child: Center(child: Composer(editOnly: true)),
+                ),
+              ],
             ),
           ),
         ],
@@ -449,75 +465,34 @@ class _FriendsArea extends StatelessWidget {
   }
 }
 
-/// A friend avatar; clicking opens a tiny menu with the mutuality state
-/// and the unfriend action (the design keeps the row pure).
-class _FriendAvatar extends StatelessWidget {
+/// A friend avatar; clicking opens their profile (which carries the
+/// friendship state and the unfriend action).
+class _FriendAvatar extends ConsumerWidget {
   const _FriendAvatar({required this.friend});
 
   final FriendEntry friend;
 
   @override
-  Widget build(BuildContext context) {
-    return MenuAnchor(
-      builder: (context, controller, _) => Tooltip(
-        message: friend.followsMeBack
-            ? friend.displayName
-            : '${friend.displayName} — awaiting their answer',
-        child: Opacity(
-          opacity: friend.followsMeBack ? 1 : 0.55,
-          child: JynAvatar(
+  Widget build(BuildContext context, WidgetRef ref) {
+    return Tooltip(
+      message: friend.followsMeBack
+          ? friend.displayName
+          : '${friend.displayName} — awaiting their answer',
+      child: Opacity(
+        opacity: friend.followsMeBack ? 1 : 0.55,
+        child: JynAvatar(
+          profileId: friend.profileId,
+          displayName: friend.displayName,
+          size: 42,
+          onTap: () => openUserProfile(
+            context,
+            ref,
             profileId: friend.profileId,
             displayName: friend.displayName,
-            size: 42,
-            onTap: () =>
-                controller.isOpen ? controller.close() : controller.open(),
           ),
         ),
       ),
-      menuChildren: [
-        MenuItemButton(
-          onPressed: null,
-          child: Text(
-            friend.followsMeBack
-                ? '${friend.displayName} · ${shortId(friend.profileId)}'
-                : '${friend.displayName} — awaiting their answer',
-          ),
-        ),
-        MenuItemButton(
-          onPressed: () => _confirmUnfriend(context),
-          child: const Text('unfriend'),
-        ),
-      ],
     );
-  }
-
-  Future<void> _confirmUnfriend(BuildContext context) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: JynColors.body,
-        title: Text('unfriend ${friend.displayName}?'),
-        content: const Text(
-          'Their river dries up for you, and yours for them.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('unfriend'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed == true && context.mounted) {
-      await runGuarded(
-        context,
-        () => removeFriend(profileId: friend.profileId),
-      );
-    }
   }
 }
 

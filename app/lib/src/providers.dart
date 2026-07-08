@@ -153,3 +153,18 @@ final backgroundErrorsProvider = Provider(
 final clockProvider = StreamProvider<int>(
   (ref) => Stream<int>.periodic(const Duration(seconds: 1), (i) => i),
 );
+
+/// The post currently loaded into the composer for editing (a post-card
+/// "edit" action sets it; the composer clears it on save/cancel).
+class EditingPostNotifier extends Notifier<ReducedPost?> {
+  @override
+  ReducedPost? build() => null;
+
+  void start(ReducedPost post) => state = post;
+
+  void clear() => state = null;
+}
+
+final editingPostProvider = NotifierProvider<EditingPostNotifier, ReducedPost?>(
+  EditingPostNotifier.new,
+);

@@ -2,9 +2,31 @@
 library;
 
 import 'package:flutter/material.dart' hide Visibility;
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'providers.dart';
 import 'rust/domain.dart';
 import 'rust/state.dart';
+import 'screens/profile_screen.dart';
+import 'screens/user_profile_screen.dart';
+
+/// Clicking any avatar or name lands on that person's profile — the local
+/// user's own profile screen for self, a read view for everyone else.
+void openUserProfile(
+  BuildContext context,
+  WidgetRef ref, {
+  required String profileId,
+  required String displayName,
+}) {
+  final isSelf = ref.read(profileProvider)?.profileId == profileId;
+  Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      builder: (_) => isSelf
+          ? const ProfileScreen()
+          : UserProfileScreen(profileId: profileId, displayName: displayName),
+    ),
+  );
+}
 
 /// Runs a user action; failures land in a snackbar instead of crashing.
 Future<void> runGuarded(
