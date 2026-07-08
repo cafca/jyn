@@ -344,7 +344,10 @@ mod tests {
     #[test]
     fn size_caps_apply_to_photos_and_videos_only() {
         assert_eq!(max_bytes_for_kind(MediaKind::Photo), Some(15 * 1024 * 1024));
-        assert_eq!(max_bytes_for_kind(MediaKind::Video), Some(200 * 1024 * 1024));
+        assert_eq!(
+            max_bytes_for_kind(MediaKind::Video),
+            Some(200 * 1024 * 1024)
+        );
         assert_eq!(max_bytes_for_kind(MediaKind::Audio), None);
         assert_eq!(max_bytes_for_kind(MediaKind::File), None);
     }

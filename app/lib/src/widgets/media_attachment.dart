@@ -123,7 +123,9 @@ class _TooLargePlaceholder extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            limit == null ? 'Too large to show' : 'Too large to show (over $limit)',
+            limit == null
+                ? 'Too large to show'
+                : 'Too large to show (over $limit)',
             textAlign: TextAlign.center,
             style: JynType.metaMono.copyWith(color: JynColors.muted),
           ),
