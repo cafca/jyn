@@ -2,8 +2,39 @@
 library;
 
 import 'package:flutter/material.dart' hide Visibility;
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'providers.dart';
 import 'rust/domain.dart';
+import 'rust/state.dart';
+import 'screens/profile_screen.dart';
+import 'screens/user_profile_screen.dart';
+
+/// Clicking any avatar or name lands on that person's profile — the local
+/// user's own profile screen for self, a read view for everyone else.
+/// Already looking at that profile? Then it's a no-op, not another layer.
+void openUserProfile(
+  BuildContext context,
+  WidgetRef ref, {
+  required String profileId,
+  required String displayName,
+}) {
+  final routeName = profileRouteName(profileId);
+  if (ModalRoute.of(context)?.settings.name == routeName) return;
+  final isSelf = ref.read(profileProvider)?.profileId == profileId;
+  Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      settings: RouteSettings(name: routeName),
+      builder: (_) => isSelf
+          ? const ProfileScreen()
+          : UserProfileScreen(profileId: profileId, displayName: displayName),
+    ),
+  );
+}
+
+/// Route identity for a profile page, so re-taps on the same person's
+/// avatar/name don't stack duplicates.
+String profileRouteName(String profileId) => 'jyn-profile:$profileId';
 
 /// Runs a user action; failures land in a snackbar instead of crashing.
 Future<void> runGuarded(
@@ -21,32 +52,58 @@ Future<void> runGuarded(
   }
 }
 
-/// Composer lifetime presets (label, seconds; null = permanent). Mirrors the
-/// old interface's options.
+/// The canonical lifetime scale (label, seconds; null = permanent) — the
+/// design's five steps, used everywhere a lifetime is chosen.
 const lifetimeOptions = <(String, int?)>[
-  ('1h', 3600),
-  ('12h', 12 * 3600),
-  ('36h', 36 * 3600),
-  ('3d', 3 * 24 * 3600),
-  ('1w', 7 * 24 * 3600),
-  ('settled', null),
+  ('6h', 6 * 3600),
+  ('24h', 24 * 3600),
+  ('1 week', 7 * 24 * 3600),
+  ('1 year', 365 * 24 * 3600),
+  ('permanent', null),
 ];
 
-String visibilityLabel(Visibility visibility) => switch (visibility) {
-  Visibility.friends => '◑ friends',
-  Visibility.circles => '◑ circles',
-  Visibility.public => '◉ public',
-  Visibility.private => '◐ only you',
+/// The finite steps only — what "make ephemeral" offers.
+const ephemeralLifetimeOptions = <(String, int)>[
+  ('6h', 6 * 3600),
+  ('24h', 24 * 3600),
+  ('1 week', 7 * 24 * 3600),
+  ('1 year', 365 * 24 * 3600),
+];
+
+/// Reach glyphs per the design; `◆` is reserved for the settled lifetime
+/// chip and never marks reach.
+String visibilityGlyph(Visibility visibility) => switch (visibility) {
+  Visibility.circles => '◑',
+  Visibility.friends => '◐',
+  Visibility.public => '◉',
+  Visibility.private => '●',
 };
 
-/// Visibilities offered by the composer (all of them) — profile defaults
-/// exclude private, matching the core's validation.
+String visibilityName(Visibility visibility) => switch (visibility) {
+  Visibility.circles => 'circles',
+  Visibility.friends => 'friends',
+  Visibility.public => 'public',
+  Visibility.private => 'only you',
+};
+
+String visibilityLabel(Visibility visibility) =>
+    '${visibilityGlyph(visibility)} ${visibilityName(visibility)}';
+
+/// Visibilities offered by the composer (all of them).
 const composerVisibilities = Visibility.values;
-const defaultableVisibilities = [
-  Visibility.friends,
-  Visibility.circles,
-  Visibility.public,
-];
+
+/// Named hearts, never a bare count: "Mira", "Mira and Soren",
+/// "Mira, Soren and others". The full list stays a tap away.
+String heartsSummary(List<RiverHeart> hearts, {int maxNames = 2}) {
+  if (hearts.isEmpty) return '';
+  final names = hearts.map((h) => h.hearterDisplayName).toList();
+  if (names.length <= maxNames) {
+    return names.length == 1
+        ? names.single
+        : '${names.sublist(0, names.length - 1).join(', ')} and ${names.last}';
+  }
+  return '${names.sublist(0, maxNames).join(', ')} and others';
+}
 
 String shortId(String profileId) =>
     profileId.length <= 8 ? profileId : profileId.substring(0, 8);

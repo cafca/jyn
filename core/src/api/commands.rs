@@ -53,8 +53,25 @@ pub async fn publish_post(
     .await
 }
 
-pub async fn edit_post(post_id: String, body: String) -> Result<()> {
-    run(NetworkCommand::EditPost { post_id, body }).await
+/// Edits a post: the body plus the full attachment list — `kept_media` are
+/// the surviving originals (removed ones simply absent), `new_media` fresh
+/// files to stage and append.
+pub async fn edit_post(
+    post_id: String,
+    body: String,
+    kept_media: Vec<crate::domain::MediaAttachment>,
+    new_media: Vec<MediaDraftInput>,
+) -> Result<()> {
+    run(NetworkCommand::EditPost {
+        post_id,
+        body,
+        kept_media,
+        new_media: new_media
+            .into_iter()
+            .map(MediaDraftInput::into_draft)
+            .collect(),
+    })
+    .await
 }
 
 pub async fn delete_post(post_id: String) -> Result<()> {

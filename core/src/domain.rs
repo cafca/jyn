@@ -199,6 +199,10 @@ pub enum DomainOperation {
         profile_id: String,
         post_id: String,
         body: String,
+        /// `None` (legacy ops) leaves attachments untouched; `Some`
+        /// replaces the full list.
+        #[serde(default)]
+        media: Option<Vec<MediaAttachment>>,
         edited_at: u64,
     },
     /// Promote (`expires_at: None`) or let it go again (`Some`).
@@ -655,9 +659,17 @@ impl JynOperationDomain {
                         },
                     );
                 }
-                DomainOperation::PostEdited { post_id, body, .. } => {
+                DomainOperation::PostEdited {
+                    post_id,
+                    body,
+                    media,
+                    ..
+                } => {
                     if let Some(post) = posts.get_mut(&post_id) {
                         post.body = body;
+                        if let Some(media) = media {
+                            post.media = media;
+                        }
                         post.edited = true;
                     }
                 }
@@ -1050,6 +1062,17 @@ mod tests {
                     profile_id: profile_id.clone(),
                     post_id: "post-a".into(),
                     body: "first, revised".into(),
+                    media: Some(vec![MediaAttachment {
+                        kind: MediaKind::Photo,
+                        blob_hash: "blob-1".into(),
+                        byte_len: 1,
+                        mime: "image/png".into(),
+                        duration_ms: None,
+                        waveform: None,
+                        width: None,
+                        height: None,
+                        file_name: None,
+                    }]),
                     edited_at: 30,
                 },
             )
@@ -1088,6 +1111,9 @@ mod tests {
         assert_eq!(post.post_id, "post-a");
         assert_eq!(post.body, "first, revised");
         assert!(post.edited);
+        // The edit's Some(media) replaced the attachment list.
+        assert_eq!(post.media.len(), 1);
+        assert_eq!(post.media[0].blob_hash, "blob-1");
         assert_eq!(post.expires_at, None);
         assert_eq!(state.tombstoned_post_ids, vec!["post-b".to_owned()]);
         assert!(state.is_tombstoned("post-b"));
@@ -1122,6 +1148,7 @@ mod tests {
                     profile_id: profile_id.clone(),
                     post_id: "post-a".into(),
                     body: "necromancy".into(),
+                    media: None,
                     edited_at: 30,
                 },
             )

@@ -7,11 +7,14 @@ import 'package:url_launcher/url_launcher.dart';
 import '../providers.dart';
 import '../rust/api/media.dart' as rust_media;
 import '../rust/domain.dart';
+import '../theme/tokens.dart';
 import 'video_attachment.dart';
 import 'voice_note_player.dart';
 
 /// Renders one attachment by kind. Blobs fetch on demand: the widget asks
-/// the core once, shows a placeholder, and rebuilds when MediaReady lands.
+/// the core once, shows a quiet placeholder, and rebuilds when MediaReady
+/// lands. Photo and video render as the design's fixed 4:5 cover tile
+/// (radius 14); audio and files keep their own card layouts.
 class MediaAttachmentView extends ConsumerWidget {
   const MediaAttachmentView({
     super.key,
@@ -33,83 +36,100 @@ class MediaAttachmentView extends ConsumerWidget {
     }
 
     return switch (attachment.kind) {
-      MediaKind.photo => _photo(context, path),
+      MediaKind.photo => _mediaTile(_photo(path)),
       MediaKind.audio => VoiceNotePlayer(
         waveform: attachment.waveform,
         durationMs: attachment.durationMs,
         mime: attachment.mime,
         path: path,
       ),
-      MediaKind.video => VideoAttachment(
-        attachment: attachment,
-        path: path,
-        playerKey: '$postId:${attachment.blobHash}',
+      MediaKind.video => _mediaTile(
+        VideoAttachment(
+          attachment: attachment,
+          path: path,
+          playerKey: '$postId:${attachment.blobHash}',
+        ),
       ),
-      MediaKind.file => _fileChip(context, path),
+      MediaKind.file => _FileCard(attachment: attachment, path: path),
     };
   }
 
-  Widget _photo(BuildContext context, String? path) {
-    if (path == null) {
-      return _placeholderBox(
-        context,
-        width: attachment.width?.toDouble(),
-        height: attachment.height?.toDouble(),
-        child: const Icon(Icons.image_outlined),
-      );
-    }
+  /// The design's media frame: 4:5, cover-cropped, radius 14.
+  Widget _mediaTile(Widget child) {
     return ClipRRect(
-      borderRadius: BorderRadius.circular(8),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxHeight: 360),
-        child: Image.file(
-          File(path),
-          fit: BoxFit.contain,
-          alignment: Alignment.centerLeft,
-          errorBuilder: (context, _, _) => _placeholderBox(
-            context,
-            child: const Icon(Icons.broken_image_outlined),
-          ),
-        ),
-      ),
+      borderRadius: BorderRadius.circular(JynRadii.media),
+      child: AspectRatio(aspectRatio: 4 / 5, child: child),
     );
   }
 
-  Widget _fileChip(BuildContext context, String? path) {
+  Widget _photo(String? path) {
+    if (path == null) return const MediaLoadingPlaceholder();
+    return Image.file(
+      File(path),
+      fit: BoxFit.cover,
+      errorBuilder: (context, _, _) =>
+          const MediaLoadingPlaceholder(icon: Icons.broken_image_outlined),
+    );
+  }
+}
+
+/// A quiet near-white loading state (deliberately not the mock's striped
+/// placeholder) that fills whatever frame it sits in.
+class MediaLoadingPlaceholder extends StatelessWidget {
+  const MediaLoadingPlaceholder({super.key, this.icon = Icons.image_outlined});
+
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: JynColors.cardGrey,
+      child: Center(child: Icon(icon, size: 28, color: JynColors.muted)),
+    );
+  }
+}
+
+/// A file attachment: paperclip, name, size; opens externally once local.
+class _FileCard extends StatelessWidget {
+  const _FileCard({required this.attachment, required this.path});
+
+  final MediaAttachment attachment;
+  final String? path;
+
+  @override
+  Widget build(BuildContext context) {
     final name = attachment.fileName ?? attachment.blobHash.substring(0, 8);
-    final size = _formatBytes(attachment.byteLen);
-    return ActionChip(
-      avatar: Icon(
-        path == null ? Icons.downloading : Icons.insert_drive_file_outlined,
-        size: 18,
-      ),
-      label: Text('$name · $size'),
-      onPressed: path == null
-          ? null
-          : () async {
-              // A named copy so the OS routes it to the right app.
-              final uri = Uri.file(path);
-              await launchUrl(uri);
-            },
-    );
-  }
-
-  Widget _placeholderBox(
-    BuildContext context, {
-    double? width,
-    double? height,
-    required Widget child,
-  }) {
-    final aspect = (width != null && height != null && height > 0)
-        ? width / height
-        : 16 / 9;
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(8),
-      child: AspectRatio(
-        aspectRatio: aspect.clamp(0.5, 3.0),
+    final fetching = path == null;
+    return MouseRegion(
+      cursor: fetching ? SystemMouseCursors.basic : SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: fetching ? null : () => launchUrl(Uri.file(path!)),
         child: Container(
-          color: Theme.of(context).colorScheme.surfaceContainerHighest,
-          child: Center(child: child),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+          decoration: BoxDecoration(
+            color: JynColors.field,
+            borderRadius: BorderRadius.circular(JynRadii.attach),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                fetching ? Icons.downloading : Icons.attach_file,
+                size: 16,
+                color: JynColors.slate,
+              ),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  name,
+                  overflow: TextOverflow.ellipsis,
+                  style: JynType.body.copyWith(fontSize: 13),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(_formatBytes(attachment.byteLen), style: JynType.metaMono),
+            ],
+          ),
         ),
       ),
     );

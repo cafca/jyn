@@ -61,6 +61,11 @@ pub enum NetworkCommand {
     EditPost {
         post_id: String,
         body: String,
+        /// Attachments the author kept, verbatim; removed ones are simply
+        /// absent. The edit op replaces the post's full media list.
+        kept_media: Vec<crate::domain::MediaAttachment>,
+        /// Freshly staged files to append.
+        new_media: Vec<MediaDraft>,
     },
     DeletePost {
         post_id: String,
@@ -547,9 +552,12 @@ async fn default_handle_command(
             Ok(())
         }
         NetworkCommand::PublishPost { draft } => publish_post(&state, &event_tx, draft).await,
-        NetworkCommand::EditPost { post_id, body } => {
-            edit_post(&state, &event_tx, post_id, body).await
-        }
+        NetworkCommand::EditPost {
+            post_id,
+            body,
+            kept_media,
+            new_media,
+        } => edit_post(&state, &event_tx, post_id, body, kept_media, new_media).await,
         NetworkCommand::DeletePost { post_id } => delete_post(&state, &event_tx, post_id).await,
         NetworkCommand::SetPostLifetime {
             post_id,
@@ -994,9 +1002,18 @@ async fn edit_post(
     event_tx: &Sender<NetworkEvent>,
     post_id: String,
     body: String,
+    kept_media: Vec<crate::domain::MediaAttachment>,
+    new_media: Vec<MediaDraft>,
 ) -> Result<()> {
+    let mut media = kept_media;
+    media.extend(import_attachments(state, event_tx, &post_id, &new_media).await?);
+    anyhow::ensure!(
+        !body.trim().is_empty() || !media.is_empty(),
+        "a post needs some words or something attached"
+    );
+
     // Private posts are edited in place; replicated posts get an edit op.
-    if state.private_posts.edit_body(&post_id, &body)? {
+    if state.private_posts.edit(&post_id, &body, media.clone())? {
         event_tx
             .send(NetworkEvent::PrivatePostsUpdated {
                 posts: state.private_posts.list()?,
@@ -1010,6 +1027,7 @@ async fn edit_post(
         profile_id: state.local_profile_id.clone(),
         post_id,
         body,
+        media: Some(media),
         edited_at: now_unix_secs(),
     })
     .await

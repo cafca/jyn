@@ -3,6 +3,8 @@ import 'dart:io';
 import 'package:flutter/material.dart' hide Visibility;
 import 'package:just_audio/just_audio.dart';
 
+import '../theme/tokens.dart';
+
 /// A voice note: the waveform travels in the post and renders before the
 /// audio blob arrives; playback unlocks once the file is local. Drives both
 /// the composer's draft (a local `.wav`) and posted attachments (a blob from
@@ -106,19 +108,19 @@ class _VoiceNotePlayerState extends State<VoiceNotePlayer> {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     final waveform = widget.waveform ?? const <int>[];
     final durationMs = widget.durationMs;
     final seconds = durationMs != null ? (durationMs / 1000).round() : null;
 
+    // The design's audio card: green-tinted ground, 44px leaf play circle,
+    // a waveform fading teal→mist left to right, mono duration.
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: scheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(999),
+        color: JynColors.cardGreen,
+        borderRadius: BorderRadius.circular(JynRadii.card),
       ),
       child: Row(
-        mainAxisSize: MainAxisSize.min,
         children: [
           StreamBuilder<PlayerState>(
             stream: _player?.playerStateStream,
@@ -130,60 +132,76 @@ class _VoiceNotePlayerState extends State<VoiceNotePlayer> {
                   (state?.playing ?? false) &&
                   state?.processingState != ProcessingState.completed;
               final fetching = widget.path == null;
-              return IconButton(
-                visualDensity: VisualDensity.compact,
-                tooltip: fetching ? 'fetching audio…' : null,
-                onPressed: fetching ? null : _toggle,
-                icon: Icon(
-                  fetching
-                      ? Icons.downloading
-                      : playing
-                      ? Icons.pause_circle_filled
-                      : Icons.play_circle_filled,
-                  color: fetching ? scheme.outline : scheme.primary,
+              return MouseRegion(
+                cursor: fetching
+                    ? SystemMouseCursors.basic
+                    : SystemMouseCursors.click,
+                child: GestureDetector(
+                  onTap: fetching ? null : _toggle,
+                  child: Container(
+                    width: 44,
+                    height: 44,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: fetching ? JynColors.muted : JynColors.leaf,
+                    ),
+                    child: Icon(
+                      fetching
+                          ? Icons.downloading
+                          : playing
+                          ? Icons.pause
+                          : Icons.play_arrow,
+                      size: 22,
+                      color: Colors.white,
+                    ),
+                  ),
                 ),
               );
             },
           ),
-          SizedBox(
-            width: 120,
-            height: 28,
-            child: StreamBuilder<Duration>(
-              stream: _player?.positionStream,
-              builder: (context, snapshot) {
-                final position = snapshot.data ?? Duration.zero;
-                final total = _totalDuration(_player);
-                final progress = (total != null && total.inMilliseconds > 0)
-                    ? position.inMilliseconds / total.inMilliseconds
-                    : 0.0;
-                return LayoutBuilder(
-                  builder: (context, constraints) => GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onTapDown: (details) =>
-                        _seek(details.localPosition.dx / constraints.maxWidth),
-                    onHorizontalDragUpdate: (details) =>
-                        _seek(details.localPosition.dx / constraints.maxWidth),
-                    child: CustomPaint(
-                      painter: _WaveformPainter(
-                        peaks: waveform,
-                        progress: progress.clamp(0.0, 1.0),
-                        playedColor: scheme.primary,
-                        unplayedColor: scheme.onSurfaceVariant.withValues(
-                          alpha: 0.4,
+          const SizedBox(width: 12),
+          Expanded(
+            child: SizedBox(
+              height: 36,
+              child: StreamBuilder<Duration>(
+                stream: _player?.positionStream,
+                builder: (context, snapshot) {
+                  final position = snapshot.data ?? Duration.zero;
+                  final total = _totalDuration(_player);
+                  final progress = (total != null && total.inMilliseconds > 0)
+                      ? position.inMilliseconds / total.inMilliseconds
+                      : 0.0;
+                  return LayoutBuilder(
+                    builder: (context, constraints) => GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTapDown: (details) => _seek(
+                        details.localPosition.dx / constraints.maxWidth,
+                      ),
+                      onHorizontalDragUpdate: (details) => _seek(
+                        details.localPosition.dx / constraints.maxWidth,
+                      ),
+                      child: CustomPaint(
+                        painter: _WaveformPainter(
+                          peaks: waveform,
+                          progress: progress.clamp(0.0, 1.0),
                         ),
                       ),
                     ),
-                  ),
-                );
-              },
+                  );
+                },
+              ),
             ),
           ),
           if (seconds != null)
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
+              padding: const EdgeInsets.only(left: 12),
               child: Text(
                 '${seconds ~/ 60}:${(seconds % 60).toString().padLeft(2, '0')}',
-                style: Theme.of(context).textTheme.labelSmall,
+                style: const TextStyle(
+                  fontFamily: JynType.mono,
+                  fontSize: 12,
+                  color: JynColors.audioDuration,
+                ),
               ),
             ),
         ],
@@ -221,50 +239,55 @@ String _audioExtension(String mime) => switch (mime) {
   _ => '',
 };
 
-/// Peak buckets (0..=255) as centered vertical bars. Bars left of [progress]
-/// (0..1) are drawn played, the rest dimmed — a playback fill.
+/// Peak buckets (0..=255) as centered 3px bars on a 5.5px pitch (the
+/// design's spacing), resampled to the available width. Bar color fades
+/// teal→mist left to right per the design tokens; bars right of
+/// [progress] render dimmed — a playback fill.
 class _WaveformPainter extends CustomPainter {
-  const _WaveformPainter({
-    required this.peaks,
-    required this.progress,
-    required this.playedColor,
-    required this.unplayedColor,
-  });
+  const _WaveformPainter({required this.peaks, required this.progress});
 
   final List<int> peaks;
   final double progress;
-  final Color playedColor;
-  final Color unplayedColor;
+
+  static const _pitch = 5.5; // 3px bar + 2.5px gap
 
   @override
   void paint(Canvas canvas, Size size) {
     if (peaks.isEmpty) return;
-    final played = Paint()
-      ..color = playedColor
-      ..strokeWidth = 3
-      ..strokeCap = StrokeCap.round;
-    final unplayed = Paint()
-      ..color = unplayedColor
-      ..strokeWidth = 3
-      ..strokeCap = StrokeCap.round;
-    final step = size.width / peaks.length;
+    final bars = (size.width / _pitch).floor().clamp(1, peaks.length);
+    final step = size.width / bars;
     final playedWidth = size.width * progress;
-    for (final (index, peak) in peaks.indexed) {
-      final x = step * index + step / 2;
+    for (var index = 0; index < bars; index++) {
+      final peak = peaks[(index * peaks.length) ~/ bars];
+      final t = bars == 1 ? 0.0 : index / (bars - 1);
+      final color = _fade(t);
+      final paint = Paint()
+        ..color = x(index, step) <= playedWidth
+            ? color
+            : color.withValues(alpha: 0.45)
+        ..strokeWidth = 3
+        ..strokeCap = StrokeCap.round;
       final magnitude = (peak / 255) * (size.height / 2 - 2);
-      final half = magnitude.clamp(1.0, size.height / 2);
+      final half = magnitude.clamp(2.0, size.height / 2);
       canvas.drawLine(
-        Offset(x, size.height / 2 - half),
-        Offset(x, size.height / 2 + half),
-        x <= playedWidth ? played : unplayed,
+        Offset(x(index, step), size.height / 2 - half),
+        Offset(x(index, step), size.height / 2 + half),
+        paint,
       );
     }
   }
 
+  double x(int index, double step) => step * index + step / 2;
+
+  /// Interpolates across the design's four waveform stops.
+  Color _fade(double t) {
+    final stops = JynColors.waveform;
+    final scaled = t * (stops.length - 1);
+    final low = scaled.floor().clamp(0, stops.length - 2);
+    return Color.lerp(stops[low], stops[low + 1], scaled - low)!;
+  }
+
   @override
   bool shouldRepaint(_WaveformPainter oldDelegate) =>
-      oldDelegate.peaks != peaks ||
-      oldDelegate.progress != progress ||
-      oldDelegate.playedColor != playedColor ||
-      oldDelegate.unplayedColor != unplayedColor;
+      oldDelegate.peaks != peaks || oldDelegate.progress != progress;
 }

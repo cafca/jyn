@@ -23,8 +23,20 @@ Future<void> publishPost({
   media: media,
 );
 
-Future<void> editPost({required String postId, required String body}) =>
-    RustLib.instance.api.crateApiCommandsEditPost(postId: postId, body: body);
+/// Edits a post: the body plus the full attachment list — `kept_media` are
+/// the surviving originals (removed ones simply absent), `new_media` fresh
+/// files to stage and append.
+Future<void> editPost({
+  required String postId,
+  required String body,
+  required List<MediaAttachment> keptMedia,
+  required List<MediaDraftInput> newMedia,
+}) => RustLib.instance.api.crateApiCommandsEditPost(
+  postId: postId,
+  body: body,
+  keptMedia: keptMedia,
+  newMedia: newMedia,
+);
 
 Future<void> deletePost({required String postId}) =>
     RustLib.instance.api.crateApiCommandsDeletePost(postId: postId);
