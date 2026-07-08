@@ -637,7 +637,13 @@ async fn default_handle_command(
             post_author_profile_id,
             post_id,
         } => {
-            state.keeps.release(&post_author_profile_id, &post_id)?;
+            if state.keeps.release(&post_author_profile_id, &post_id)? {
+                unpin_and_prune_prefix(
+                    &state,
+                    &format!("keep/{post_author_profile_id}/{post_id}/"),
+                )
+                .await;
+            }
             emit_keeps(&state, &event_tx)
         }
         NetworkCommand::FetchMedia { blob_hash } => fetch_media(&state, &event_tx, blob_hash).await,
@@ -648,6 +654,24 @@ async fn default_handle_command(
 /// Downloads an attachment blob from known peers into the media cache.
 /// Failures surface as `MediaFailed` (so the card can stop spinning), not
 /// as UI error lines — media arrives when peers do.
+/// Releases a post's or keep's hold on its attachments: prunes the
+/// materialized cache files and removes the pins under `prefix`, so any blob
+/// no other post or keep still pins becomes eligible for GC. Best-effort —
+/// blob teardown never fails a user action.
+async fn unpin_and_prune_prefix(state: &RuntimeState, prefix: &str) {
+    match state.node.blobs.pins().list_prefix(prefix).await {
+        Ok(pins) => {
+            for pin in pins {
+                crate::media::prune_cached(&state.media_cache_dir, &pin.hash.to_string());
+            }
+        }
+        Err(err) => tracing::warn!("failed to list pins under {prefix}: {err}"),
+    }
+    if let Err(err) = state.node.blobs.pins().delete_prefix(prefix).await {
+        tracing::warn!("failed to unpin under {prefix}: {err}");
+    }
+}
+
 async fn fetch_media(
     state: &RuntimeState,
     event_tx: &Sender<NetworkEvent>,
@@ -660,16 +684,29 @@ async fn fetch_media(
         if !state.node.blobs.has(hash).await? {
             state.node.blobs.download(hash).await?;
         }
-        let bytes = state.node.blobs.get_bytes(hash).await?;
         std::fs::create_dir_all(&state.media_cache_dir).with_context(|| {
             format!(
                 "failed to create media cache {}",
                 state.media_cache_dir.display()
             )
         })?;
+        // Materialize a standalone copy out of the content-addressed store
+        // (whose on-disk layout the app can't hand to the OS directly). This
+        // copy is disposable — prune/eviction can delete it and it re-exports
+        // on the next view.
         let path = state.media_cache_dir.join(&blob_hash);
-        std::fs::write(&path, bytes.as_ref())
-            .with_context(|| format!("failed to write media cache file {}", path.display()))?;
+        state
+            .node
+            .blobs
+            .export(hash, &path)
+            .finish()
+            .await
+            .map_err(|err| anyhow::anyhow!("failed to export blob {blob_hash}: {err}"))?;
+        crate::media::evict_to_budget(
+            &state.media_cache_dir,
+            crate::media::MEDIA_CACHE_BUDGET_BYTES,
+            &blob_hash,
+        );
         Ok(path)
     }
     .await;
@@ -703,6 +740,36 @@ async fn keep_post(
         .with_context(|| format!("post {post_id} not found in their stream"))?
         .clone();
     drop(sync);
+
+    // A keep is a lease on the bytes, not just the text: pin the attachments
+    // under our own keep/ name so they survive the original post's expiry or
+    // deletion (and its feed/ pin going away). Released in `release` and when
+    // the lease lapses in `drain_expired`.
+    for attachment in &snapshot.media {
+        match attachment.blob_hash.parse::<p2panda_blobs::Hash>() {
+            Ok(hash) => {
+                if let Err(err) = state
+                    .node
+                    .blobs
+                    .pins()
+                    .set(
+                        format!(
+                            "keep/{post_author_profile_id}/{post_id}/{}",
+                            attachment.blob_hash
+                        ),
+                        hash,
+                    )
+                    .await
+                {
+                    tracing::warn!("failed to pin kept blob {}: {err}", attachment.blob_hash);
+                }
+            }
+            Err(err) => tracing::warn!(
+                "kept post {post_id} carries an unparseable blob hash {}: {err}",
+                attachment.blob_hash
+            ),
+        }
+    }
 
     state.keeps.keep(crate::local_stores::KeepRecord {
         post_id,
@@ -881,7 +948,9 @@ async fn recover_startup(state: &RuntimeState, event_tx: &Sender<NetworkEvent>) 
 
     // Private posts (drain anything that expired while the app was closed).
     let now = now_unix_secs();
-    state.private_posts.drain_expired(now)?;
+    for post in &state.private_posts.drain_expired(now)? {
+        unpin_and_prune_prefix(state, &format!("feed/{}/", post.post_id)).await;
+    }
     event_tx
         .send(NetworkEvent::PrivatePostsUpdated {
             posts: state.private_posts.list()?,
@@ -955,24 +1024,47 @@ async fn import_attachments(
         let byte_len = std::fs::metadata(&media.path)
             .with_context(|| format!("failed to read attachment {}", media.path.display()))?
             .len();
-        let tag = state
+        // Post-time guard, authoritative over every caller (covers edits and,
+        // once wired, transcoded output). The composer rejects oversized files
+        // earlier for immediate feedback; this backstops the storage boundary.
+        if let Some(max) = crate::media::max_bytes_for_kind(media.kind) {
+            anyhow::ensure!(
+                byte_len <= max,
+                "attachment {} is too large ({byte_len} bytes; limit {max} for this kind)",
+                media.path.display()
+            );
+        }
+        // Import under a single named pin. Awaiting add_path() directly would
+        // also create an auto-tag that nothing ever cleans up, so the blob
+        // would survive unpin forever; holding a temp tag while we set only
+        // our feed/ pin leaves the post as the blob's sole GC root, so
+        // deleting or draining the post can actually reclaim it.
+        let temp_tag = state
             .node
             .blobs
             .add_path(&media.path)
+            .temp_tag()
             .await
             .map_err(|err| anyhow::anyhow!("failed to import {}: {err}", media.path.display()))?;
-        let blob_hash = tag.hash.to_string();
+        let hash = temp_tag.hash();
+        let blob_hash = hash.to_string();
         state
             .node
             .blobs
             .pins()
-            .set(format!("feed/{post_id}/{blob_hash}"), tag.hash)
+            .set(format!("feed/{post_id}/{blob_hash}"), hash)
             .await
             .map_err(|err| anyhow::anyhow!("failed to pin attachment: {err}"))?;
+        drop(temp_tag);
 
         std::fs::create_dir_all(&state.media_cache_dir).ok();
         let cached = state.media_cache_dir.join(&blob_hash);
         if !cached.exists() && std::fs::copy(&media.path, &cached).is_ok() {
+            crate::media::evict_to_budget(
+                &state.media_cache_dir,
+                crate::media::MEDIA_CACHE_BUDGET_BYTES,
+                &blob_hash,
+            );
             let _ = event_tx.send(NetworkEvent::MediaReady {
                 blob_hash: blob_hash.clone(),
                 path: cached,
@@ -1039,6 +1131,7 @@ async fn delete_post(
     post_id: String,
 ) -> Result<()> {
     if state.private_posts.remove(&post_id)? {
+        unpin_and_prune_prefix(state, &format!("feed/{post_id}/")).await;
         event_tx
             .send(NetworkEvent::PrivatePostsUpdated {
                 posts: state.private_posts.list()?,
@@ -1055,15 +1148,7 @@ async fn delete_post(
     })
     .await?;
     drop(sync);
-    if let Err(err) = state
-        .node
-        .blobs
-        .pins()
-        .delete_prefix(format!("feed/{post_id}/"))
-        .await
-    {
-        tracing::warn!("failed to unpin media of deleted post {post_id}: {err}");
-    }
+    unpin_and_prune_prefix(state, &format!("feed/{post_id}/")).await;
     Ok(())
 }
 
@@ -1138,6 +1223,9 @@ async fn drain_expired(state: &RuntimeState, event_tx: &Sender<NetworkEvent>) ->
     let now = now_unix_secs();
     let drained = state.private_posts.drain_expired(now)?;
     if !drained.is_empty() {
+        for post in &drained {
+            unpin_and_prune_prefix(state, &format!("feed/{}/", post.post_id)).await;
+        }
         event_tx
             .send(NetworkEvent::PrivatePostsUpdated {
                 posts: state.private_posts.list()?,
@@ -1163,6 +1251,13 @@ async fn drain_expired(state: &RuntimeState, event_tx: &Sender<NetworkEvent>) ->
             tombstoned.iter().any(|(a, p)| a == author && p == post_id)
         })?;
         if !dead.is_empty() {
+            for keep in &dead {
+                unpin_and_prune_prefix(
+                    state,
+                    &format!("keep/{}/{}/", keep.author_profile_id, keep.post_id),
+                )
+                .await;
+            }
             emit_keeps(state, event_tx)?;
         }
     }

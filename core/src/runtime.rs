@@ -248,9 +248,18 @@ impl AppRuntime {
     pub fn request_media(&self, blob_hash: String) -> Result<()> {
         {
             let mut shared = self.lock_shared();
-            if shared.media.local_path_for(&blob_hash).is_some()
-                || !shared.media.fetch_requested.insert(blob_hash.clone())
-            {
+            // Already local (fetched earlier, or cached when we cast it):
+            // Dart's mediaPaths map is empty on a fresh launch, so re-emit
+            // MediaReady to hand it the path. Returning silently would leave
+            // the attachment stuck on its loading placeholder forever.
+            if let Some(path) = shared.media.local_path_for(&blob_hash) {
+                shared.emit(JynEvent::MediaReady {
+                    blob_hash,
+                    path: path.to_string_lossy().into_owned(),
+                });
+                return Ok(());
+            }
+            if !shared.media.fetch_requested.insert(blob_hash.clone()) {
                 return Ok(());
             }
         }

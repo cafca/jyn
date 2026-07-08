@@ -5,6 +5,7 @@ import 'package:flutter/material.dart' hide Visibility;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../actions.dart';
+import '../media_limits.dart';
 import '../providers.dart';
 import '../rust/api/commands.dart';
 import '../rust/domain.dart';
@@ -80,9 +81,34 @@ class _ComposerState extends ConsumerState<Composer> {
   Future<void> _attachFiles() async {
     final files = await openFiles();
     if (files.isEmpty) return;
-    setState(() {
-      _attachments.addAll(files.map((f) => MediaDraftInput(path: f.path)));
-    });
+
+    // Reject oversized media before it is staged, so a single huge file never
+    // enters the blob store or the media cache (see media_limits.dart).
+    final accepted = <MediaDraftInput>[];
+    final rejected = <String>[];
+    for (final f in files) {
+      final kind = kindForPath(f.path);
+      if (exceedsLimit(kind, await f.length())) {
+        rejected.add(f.name);
+      } else {
+        accepted.add(MediaDraftInput(path: f.path));
+      }
+    }
+
+    if (rejected.isNotEmpty && mounted) {
+      final noun = rejected.length == 1 ? 'file is' : 'files are';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '${rejected.join(', ')} $noun too large '
+            '(limit $kMaxPhotoBytesLabel for images, '
+            '$kMaxVideoBytesLabel for videos)',
+          ),
+        ),
+      );
+    }
+    if (accepted.isEmpty) return;
+    setState(() => _attachments.addAll(accepted));
   }
 
   /// The collapsed pill's paperclip: pick files, then open the card with
