@@ -14,8 +14,9 @@ import 'lifetime_indicator.dart';
 import 'media_attachment.dart';
 
 /// One post as the river renders it: author row, media with its lifetime
-/// ring, the action row, named hearts, and comments. Author controls live
-/// in the `···` overflow menu.
+/// ring, the action row, named hearts, and comments. Own posts carry an
+/// edit button that opens the post in the composer (body, lifetime,
+/// delete).
 class PostCard extends ConsumerStatefulWidget {
   const PostCard({super.key, required this.post});
 
@@ -147,7 +148,17 @@ class _PostCardState extends ConsumerState<PostCard> {
           ),
           const SizedBox(width: 6),
         ],
-        if (post.isSelf) _ownPostMenu(),
+        if (post.isSelf)
+          // Own posts open in the composer for editing — body, lifetime,
+          // and delete all live there.
+          _ActionIcon(
+            icon: Icons.edit_outlined,
+            size: 18,
+            color: JynColors.secondary,
+            tooltip: 'edit',
+            onTap: () =>
+                ref.read(editingPostProvider.notifier).start(post.post),
+          ),
       ],
     );
   }
@@ -432,87 +443,6 @@ class _PostCardState extends ConsumerState<PostCard> {
       ),
     );
     _commentDraft.clear();
-  }
-
-  // ---- author controls (··· menu) -------------------------------------------
-
-  Widget _ownPostMenu() {
-    final ephemeral = post.post.expiresAt != null;
-    return MenuAnchor(
-      builder: (context, controller, _) => _ActionIcon(
-        icon: Icons.more_horiz,
-        size: 20,
-        color: JynColors.secondary,
-        tooltip: 'post options',
-        onTap: () => controller.isOpen ? controller.close() : controller.open(),
-      ),
-      menuChildren: [
-        MenuItemButton(
-          // Editing happens in the composer, not a dialog.
-          onPressed: () =>
-              ref.read(editingPostProvider.notifier).start(post.post),
-          child: const Text('edit'),
-        ),
-        if (ephemeral)
-          MenuItemButton(
-            onPressed: () => runGuarded(
-              context,
-              () => setPostLifetime(postId: post.post.postId),
-            ),
-            child: const Text('make permanent'),
-          )
-        else
-          SubmenuButton(
-            menuChildren: [
-              for (final (label, secs) in ephemeralLifetimeOptions)
-                MenuItemButton(
-                  onPressed: () => runGuarded(
-                    context,
-                    () => setPostLifetime(
-                      postId: post.post.postId,
-                      expiresAt: nowUnixSecs() + secs,
-                    ),
-                  ),
-                  child: Text(label),
-                ),
-            ],
-            child: const Text('make ephemeral'),
-          ),
-        MenuItemButton(
-          onPressed: _confirmDelete,
-          child: const Text(
-            'delete',
-            style: TextStyle(color: Color(0xFFB3402A)),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Future<void> _confirmDelete() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: JynColors.body,
-        title: const Text('delete post?'),
-        content: const Text(
-          'The delete reaches every copy, kept ones included.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('delete'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed == true && mounted) {
-      await runGuarded(context, () => deletePost(postId: post.post.postId));
-    }
   }
 }
 

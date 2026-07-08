@@ -8,7 +8,9 @@ import '../actions.dart';
 import '../providers.dart';
 import '../rust/api/commands.dart';
 import '../rust/domain.dart';
+import '../theme/chrome.dart';
 import '../theme/tokens.dart';
+import '../time_format.dart';
 import 'jyn_avatar.dart';
 import 'voice_note_player.dart';
 import 'voice_recorder.dart';
@@ -112,33 +114,101 @@ class _ComposerState extends ConsumerState<Composer> {
   bool get _canCast =>
       !_casting && (_body.text.trim().isNotEmpty || _attachments.isNotEmpty);
 
+  // The lifetime chip that matched the post when editing started, so save
+  // only touches the lifetime when the user actually moved it.
+  int? _editInitialLifetime;
+
+  /// The five-step chip that best represents a post's current lifetime.
+  static int? _nearestLifetime(ReducedPost post) {
+    final expiresAt = post.expiresAt;
+    if (expiresAt == null) return null;
+    final original = expiresAt - post.createdAt;
+    int? best;
+    var bestDiff = 1 << 62;
+    for (final (_, secs) in ephemeralLifetimeOptions) {
+      final diff = (secs - original).abs();
+      if (diff < bestDiff) {
+        bestDiff = diff;
+        best = secs;
+      }
+    }
+    return best;
+  }
+
   /// Load a post into the card for editing (or clear back out).
   void _onEditingChanged(ReducedPost? previous, ReducedPost? next) {
     if (next != null && next.postId != previous?.postId) {
+      _editInitialLifetime = _nearestLifetime(next);
       _body.text = next.body;
-      setState(() => _expanded = true);
+      setState(() {
+        _visibility = next.visibility;
+        _lifetimeSecs = _editInitialLifetime;
+        _expanded = true;
+      });
       _focusNode.requestFocus();
     }
   }
 
+  /// Leave edit mode and restore the fresh-post defaults.
   void _cancelEdit() {
     ref.read(editingPostProvider.notifier).clear();
     _body.clear();
     _focusNode.unfocus();
-    setState(() => _expanded = false);
+    setState(() {
+      _visibility = Visibility.circles;
+      _lifetimeSecs = 24 * 3600;
+      _expanded = false;
+    });
   }
 
+  /// Publish only what changed: the body (marked as edited) and/or the
+  /// lifetime (a changed chip restarts the clock from now).
   Future<void> _saveEdit(ReducedPost editing) async {
     final body = _body.text.trim();
-    if (body.isEmpty) return;
+    if (body.isEmpty && editing.media.isEmpty) return;
     setState(() => _casting = true);
-    await runGuarded(
-      context,
-      () => editPost(postId: editing.postId, body: body),
-    );
+    await runGuarded(context, () async {
+      if (body != editing.body) {
+        await editPost(postId: editing.postId, body: body);
+      }
+      if (_lifetimeSecs != _editInitialLifetime) {
+        await setPostLifetime(
+          postId: editing.postId,
+          expiresAt: _lifetimeSecs == null
+              ? null
+              : nowUnixSecs() + _lifetimeSecs!,
+        );
+      }
+    });
     if (!mounted) return;
     setState(() => _casting = false);
     _cancelEdit();
+  }
+
+  Future<void> _confirmDelete(ReducedPost editing) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: JynColors.body,
+        title: const Text('delete post?'),
+        content: const Text(
+          'The delete reaches every copy, kept ones included.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    await runGuarded(context, () => deletePost(postId: editing.postId));
+    if (mounted) _cancelEdit();
   }
 
   @override
@@ -182,90 +252,11 @@ class _ComposerState extends ConsumerState<Composer> {
                 duration: const Duration(milliseconds: 200),
                 curve: Curves.easeOutCubic,
                 alignment: Alignment.bottomCenter,
-                child: editing != null
-                    ? _editCard(editing)
-                    : expanded
-                    ? _card()
-                    : _pill(),
+                child: expanded ? _card(editing) : _pill(),
               ),
             ),
           ),
         ),
-      ),
-    );
-  }
-
-  // ---- edit mode ----------------------------------------------------------
-
-  Widget _editCard(ReducedPost editing) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 13, 16, 13),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Text(
-                'editing post',
-                style: JynType.body.copyWith(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const Spacer(),
-              MouseRegion(
-                cursor: SystemMouseCursors.click,
-                child: GestureDetector(
-                  onTap: _cancelEdit,
-                  child: const Icon(
-                    Icons.close,
-                    size: 17,
-                    color: JynColors.secondary,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _body,
-            focusNode: _focusNode,
-            minLines: 1,
-            maxLines: 6,
-            style: JynType.body.copyWith(fontSize: 15),
-            cursorColor: JynColors.leaf,
-            cursorWidth: 2,
-            decoration: const InputDecoration(
-              isDense: true,
-              border: InputBorder.none,
-            ),
-            onTapOutside: (_) {},
-            onChanged: (_) => setState(() {}),
-          ),
-          const SizedBox(height: 10),
-          Container(height: 1, color: JynColors.hairlineFaint),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  'saved edits are marked',
-                  style: JynType.body.copyWith(
-                    fontSize: 12,
-                    color: JynColors.muted,
-                  ),
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              _primaryPill(
-                label: 'save',
-                enabled: !_casting && _body.text.trim().isNotEmpty,
-                onTap: () => _saveEdit(editing),
-              ),
-            ],
-          ),
-        ],
       ),
     );
   }
@@ -318,7 +309,11 @@ class _ComposerState extends ConsumerState<Composer> {
 
   // ---- expanded card ------------------------------------------------------
 
-  Widget _card() {
+  /// The one composer card, for casting and editing alike. In edit mode
+  /// the reach is fixed, attachments are frozen, and cast becomes
+  /// delete + save.
+  Widget _card(ReducedPost? editing) {
+    final isEditing = editing != null;
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 13, 16, 13),
       child: Column(
@@ -330,14 +325,31 @@ class _ComposerState extends ConsumerState<Composer> {
               _selfAvatar(),
               const SizedBox(width: 8),
               Text(
-                'to your river',
+                isEditing ? 'editing your post' : 'to your river',
                 style: JynType.body.copyWith(
                   fontSize: 13,
                   fontWeight: FontWeight.w600,
                 ),
               ),
               const Spacer(),
-              _reachPill(),
+              _reachPill(interactive: !isEditing),
+              if (isEditing) ...[
+                const SizedBox(width: 8),
+                Tooltip(
+                  message: 'discard changes',
+                  child: MouseRegion(
+                    cursor: SystemMouseCursors.click,
+                    child: GestureDetector(
+                      onTap: _cancelEdit,
+                      child: const Icon(
+                        Icons.close,
+                        size: 17,
+                        color: JynColors.secondary,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ],
           ),
           const SizedBox(height: 8),
@@ -350,7 +362,7 @@ class _ComposerState extends ConsumerState<Composer> {
             cursorColor: JynColors.leaf,
             cursorWidth: 2,
             decoration: InputDecoration(
-              hintText: 'cast something into the river…',
+              hintText: isEditing ? null : 'cast something into the river…',
               hintStyle: JynType.body.copyWith(
                 fontSize: 15,
                 color: JynColors.muted,
@@ -363,7 +375,7 @@ class _ComposerState extends ConsumerState<Composer> {
             onTapOutside: (_) {},
             onChanged: (_) => setState(() {}),
           ),
-          if (_attachments.isNotEmpty) ...[
+          if (!isEditing && _attachments.isNotEmpty) ...[
             const SizedBox(height: 8),
             _attachmentList(),
           ],
@@ -381,15 +393,37 @@ class _ComposerState extends ConsumerState<Composer> {
           const SizedBox(height: 12),
           Row(
             children: [
-              _attachButton(),
-              const SizedBox(width: 4),
-              VoiceRecorderButton(
-                onRecorded: (draft) => setState(() => _attachments.add(draft)),
-              ),
+              if (isEditing)
+                // Attachments travel with the original cast; freeze them.
+                Upcoming(
+                  message: 'attachments can’t be edited yet',
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _attachButton(),
+                      const SizedBox(width: 4),
+                      const Icon(
+                        Icons.mic_none,
+                        size: 22,
+                        color: JynColors.slate,
+                      ),
+                    ],
+                  ),
+                )
+              else ...[
+                _attachButton(),
+                const SizedBox(width: 4),
+                VoiceRecorderButton(
+                  onRecorded: (draft) =>
+                      setState(() => _attachments.add(draft)),
+                ),
+              ],
               const SizedBox(width: 6),
               Expanded(
                 child: Text(
-                  'attach a photo, audio or file',
+                  isEditing
+                      ? 'saved edits are marked'
+                      : 'attach a photo, audio or file',
                   style: JynType.body.copyWith(
                     fontSize: 12,
                     color: JynColors.muted,
@@ -397,10 +431,47 @@ class _ComposerState extends ConsumerState<Composer> {
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
-              _castButton(),
+              if (isEditing) ...[
+                _deleteButton(editing),
+                const SizedBox(width: 8),
+                _primaryPill(
+                  label: 'save',
+                  enabled:
+                      !_casting &&
+                      (_body.text.trim().isNotEmpty ||
+                          editing.media.isNotEmpty),
+                  onTap: () => _saveEdit(editing),
+                ),
+              ] else
+                _castButton(),
             ],
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _deleteButton(ReducedPost editing) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: () => _confirmDelete(editing),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(JynRadii.button),
+            border: Border.all(color: const Color(0x33B3402A)),
+          ),
+          child: const Text(
+            'delete',
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: Color(0xFFB3402A),
+              height: 1.0,
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -415,7 +486,7 @@ class _ComposerState extends ConsumerState<Composer> {
     );
   }
 
-  Widget _reachPill() {
+  Widget _reachPill({required bool interactive}) {
     final pill = Container(
       padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
       decoration: BoxDecoration(
@@ -423,10 +494,14 @@ class _ComposerState extends ConsumerState<Composer> {
         borderRadius: BorderRadius.circular(999),
       ),
       child: Text(
-        '${visibilityLabel(_visibility)} ▾',
+        interactive
+            ? '${visibilityLabel(_visibility)} ▾'
+            : visibilityLabel(_visibility),
         style: JynType.body.copyWith(fontSize: 12, color: JynColors.mid),
       ),
     );
+    // Reach can't change after casting; in edit mode the pill is a label.
+    if (!interactive) return pill;
     return MenuAnchor(
       // The menu overlay counts as "outside" the card's TapRegion; flag it
       // open so picking a reach never collapses the composer.
