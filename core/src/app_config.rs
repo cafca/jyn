@@ -35,6 +35,7 @@ pub fn resolve_node_options(settings: &AppSettings) -> Result<NodeOptions> {
         relay_url,
         mdns_enabled: settings.mdns_enabled,
         insecure_skip_relay_cert_verify,
+        gc_enabled: true,
     })
 }
 

@@ -10,7 +10,12 @@ use tracing::{info, warn};
 /// wire codec, store schema). Stores written by a different version are wiped on startup: all
 /// shares, downloads, contacts and synced state are removed. Only the node identity
 /// (`node.key`) and app settings (`settings.json`) survive an upgrade.
-pub const DATA_SCHEMA_VERSION: u32 = 1;
+/// v2: blob lifecycle overhaul — imports now take a single `feed/…` pin
+/// (v1 also left an un-cleanable auto-tag), keeps pin their own blobs, and the
+/// store runs GC. Legacy stores carry double-tagged, never-collectable blobs
+/// and a permanent (never-evicted) media cache, so they are wiped for a clean
+/// baseline rather than migrated.
+pub const DATA_SCHEMA_VERSION: u32 = 2;
 
 const SCHEMA_VERSION_FILE: &str = "schema.version";
 

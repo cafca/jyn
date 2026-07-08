@@ -1,9 +1,12 @@
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use directories::ProjectDirs;
+use iroh_blobs::store::fs::options::Options as BlobStoreOptions;
+use iroh_blobs::store::GcConfig;
 use p2panda_blobs::{Blobs, FsStore};
 use p2panda_core::identity::SIGNING_KEY_LEN;
 use p2panda_core::SigningKey;
@@ -22,11 +25,21 @@ const NODE_KEY_FILE: &str = "node.key";
 const BLOBS_DIR: &str = "blobs";
 const ADDRESS_BOOK_DB_FILE: &str = "address-book.sqlite3";
 
+/// How often the blob store sweeps for garbage: blobs no longer pinned by any
+/// post (`feed/…`) or keep (`keep/…`) are reclaimed. Pins are the protected
+/// set, so teardown (delete, expiry, keep release) is what actually frees disk.
+const BLOB_GC_INTERVAL: Duration = Duration::from_secs(600);
+
 #[derive(Clone, Debug)]
 pub struct NodeOptions {
     pub relay_url: Option<RelayUrl>,
     pub mdns_enabled: bool,
     pub insecure_skip_relay_cert_verify: bool,
+    /// Run the blob store's garbage collector. On (production default) the
+    /// store stays resident for the process lifetime — the GC task holds a
+    /// store handle, so it cannot be cleanly reopened in-process. Tests that
+    /// reopen the same data directory disable it.
+    pub gc_enabled: bool,
 }
 
 impl Default for NodeOptions {
@@ -35,6 +48,7 @@ impl Default for NodeOptions {
             relay_url: None,
             mdns_enabled: true,
             insecure_skip_relay_cert_verify: false,
+            gc_enabled: true,
         }
     }
 }
@@ -107,12 +121,22 @@ impl AppNode {
             .await?;
 
         let blobs_dir = data_dir.join(BLOBS_DIR);
-        let fs_store = FsStore::load(&blobs_dir).await.with_context(|| {
-            format!(
-                "failed to load blob store from {}",
-                blobs_dir.as_path().display()
-            )
-        })?;
+        // Enable GC with pins as the protected set. `FsStore::load` leaves GC
+        // off, so unpinning would never reclaim disk; mirror its layout
+        // (`blobs.db` alongside the data dir) but attach a GC config.
+        let mut blob_options = BlobStoreOptions::new(&blobs_dir);
+        blob_options.gc = opts.gc_enabled.then(|| GcConfig {
+            interval: BLOB_GC_INTERVAL,
+            add_protected: None,
+        });
+        let fs_store = FsStore::load_with_opts(blobs_dir.join("blobs.db"), blob_options)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to load blob store from {}",
+                    blobs_dir.as_path().display()
+                )
+            })?;
         let blobs = Blobs::new(&fs_store, &endpoint, &address_book).await?;
 
         Ok(Self {
@@ -220,7 +244,14 @@ mod tests {
     async fn reuses_private_key_for_same_data_dir() -> Result<()> {
         let temp_dir = tempdir()?;
 
-        let node_a = AppNode::with_data_dir(temp_dir.path(), NodeOptions::default()).await?;
+        // GC keeps the blob store resident (its task holds a store handle), so
+        // it can't be reopened in-process; disable it to exercise reopen.
+        let options = NodeOptions {
+            gc_enabled: false,
+            ..NodeOptions::default()
+        };
+
+        let node_a = AppNode::with_data_dir(temp_dir.path(), options.clone()).await?;
         let node_a_id = node_a.node_id();
 
         assert!(temp_dir.path().join(NODE_KEY_FILE).is_file());
@@ -234,7 +265,7 @@ mod tests {
 
         let node_b = timeout(
             Duration::from_secs(5),
-            AppNode::with_data_dir(temp_dir.path(), NodeOptions::default()),
+            AppNode::with_data_dir(temp_dir.path(), options),
         )
         .await
         .context("timed out reopening the same node data directory")??;

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart' hide Visibility;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../media_limits.dart';
 import '../providers.dart';
 import '../rust/api/media.dart' as rust_media;
 import '../rust/domain.dart';
@@ -27,6 +28,14 @@ class MediaAttachmentView extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // Oversized media is never fetched: a single huge file would otherwise
+    // dominate (and thrash) the media cache. Show a static "too large" tile
+    // instead. Enforced at post time too, but this also covers media posted
+    // by other peers (see media_limits.dart).
+    if (exceedsLimit(attachment.kind, attachment.byteLen)) {
+      return _mediaTile(_TooLargePlaceholder(kind: attachment.kind));
+    }
+
     final path = ref.watch(
       mediaPathsProvider.select((paths) => paths[attachment.blobHash]),
     );
@@ -85,6 +94,43 @@ class MediaLoadingPlaceholder extends StatelessWidget {
     return Container(
       color: JynColors.cardGrey,
       child: Center(child: Icon(icon, size: 28, color: JynColors.muted)),
+    );
+  }
+}
+
+/// Shown in place of media that exceeds its size limit: it is never fetched,
+/// so there is no file to render. Fills the 4:5 media frame.
+class _TooLargePlaceholder extends StatelessWidget {
+  const _TooLargePlaceholder({required this.kind});
+
+  final MediaKind kind;
+
+  @override
+  Widget build(BuildContext context) {
+    final limit = limitLabelForKind(kind);
+    return Container(
+      color: JynColors.cardGrey,
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(
+            kind == MediaKind.video
+                ? Icons.videocam_off_outlined
+                : Icons.hide_image_outlined,
+            size: 28,
+            color: JynColors.muted,
+          ),
+          const SizedBox(height: 8),
+          Text(
+            limit == null
+                ? 'Too large to show'
+                : 'Too large to show (over $limit)',
+            textAlign: TextAlign.center,
+            style: JynType.metaMono.copyWith(color: JynColors.muted),
+          ),
+        ],
+      ),
     );
   }
 }

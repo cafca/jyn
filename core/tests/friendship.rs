@@ -77,6 +77,9 @@ async fn request_accept_and_posts_flow_both_ways() -> Result<()> {
         relay_url: Some(relay_url.clone()),
         mdns_enabled: false,
         insecure_skip_relay_cert_verify: true,
+        // Off so nodes can reopen the same data dir in-process (GC keeps the
+        // blob store resident).
+        gc_enabled: false,
     };
 
     let dir_a = tempdir()?;
@@ -196,6 +199,9 @@ async fn request_reaches_target_who_was_offline() -> Result<()> {
         relay_url: Some(relay_url.clone()),
         mdns_enabled: false,
         insecure_skip_relay_cert_verify: true,
+        // Off so nodes can reopen the same data dir in-process (GC keeps the
+        // blob store resident).
+        gc_enabled: false,
     };
 
     // Alice exists (identity created, onboarded) but goes offline.
@@ -246,6 +252,9 @@ async fn media_attachments_round_trip_between_friends() -> Result<()> {
         relay_url: Some(relay_url.clone()),
         mdns_enabled: false,
         insecure_skip_relay_cert_verify: true,
+        // Off so nodes can reopen the same data dir in-process (GC keeps the
+        // blob store resident).
+        gc_enabled: false,
     };
 
     let dir_a = tempdir()?;

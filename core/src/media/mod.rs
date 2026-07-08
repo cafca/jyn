@@ -181,6 +181,86 @@ fn extension_for_mime(mime: &str) -> &'static str {
     }
 }
 
+/// Bytes over which an attachment of a given kind is refused at post time and
+/// hidden (never fetched) at render time. This keeps any single file from
+/// dominating — or thrashing — the media cache. Audio and generic files are
+/// uncapped. Mirrored in `app/lib/src/media_limits.dart`; keep the two in sync.
+pub const MAX_PHOTO_BYTES: u64 = 15 * 1024 * 1024;
+pub const MAX_VIDEO_BYTES: u64 = 200 * 1024 * 1024;
+
+/// The size ceiling for a media kind, or `None` if the kind is uncapped.
+pub fn max_bytes_for_kind(kind: MediaKind) -> Option<u64> {
+    match kind {
+        MediaKind::Photo => Some(MAX_PHOTO_BYTES),
+        MediaKind::Video => Some(MAX_VIDEO_BYTES),
+        MediaKind::Audio | MediaKind::File => None,
+    }
+}
+
+/// Soft ceiling for the on-demand media cache. The cache is a disposable,
+/// re-materializable view of the pinned blob store (see [`crate::bridge`]);
+/// once it grows past this, the least-recently-touched files are evicted and
+/// re-exported from the store on next view.
+pub const MEDIA_CACHE_BUDGET_BYTES: u64 = 512 * 1024 * 1024;
+
+/// Removes a blob's materialized cache file, if present. The pinned blob
+/// store remains the source of truth; the file re-materializes on next fetch.
+/// Best-effort: a missing file or an unlink error is not fatal.
+pub fn prune_cached(media_cache_dir: &Path, blob_hash: &str) {
+    let path = media_cache_dir.join(blob_hash);
+    if path.exists() {
+        if let Err(err) = std::fs::remove_file(&path) {
+            tracing::debug!("failed to prune media cache file {}: {err}", path.display());
+        }
+    }
+}
+
+/// Keeps the media cache under `budget_bytes` by evicting oldest-first (by
+/// modification time). The cache is derived from the blob store, so eviction
+/// never loses data — evicted blobs re-export on next view. Best-effort.
+///
+/// `keep` is the blob we just materialized: it is never evicted, so a single
+/// attachment larger than the whole budget still survives the pass that would
+/// otherwise delete the very file we are about to hand the UI (the cache just
+/// sits over budget until something smaller can be reclaimed instead).
+pub fn evict_to_budget(media_cache_dir: &Path, budget_bytes: u64, keep: &str) {
+    let mut entries: Vec<(PathBuf, u64, std::time::SystemTime)> = Vec::new();
+    let mut total: u64 = 0;
+    let read_dir = match std::fs::read_dir(media_cache_dir) {
+        Ok(read_dir) => read_dir,
+        Err(_) => return,
+    };
+    for entry in read_dir.flatten() {
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        if !metadata.is_file() {
+            continue;
+        }
+        // Count every file toward disk usage, but never evict the one we just
+        // wrote — it is in flight to the UI.
+        total = total.saturating_add(metadata.len());
+        if entry.file_name().to_string_lossy() == keep {
+            continue;
+        }
+        let modified = metadata.modified().unwrap_or(std::time::UNIX_EPOCH);
+        entries.push((entry.path(), metadata.len(), modified));
+    }
+    if total <= budget_bytes {
+        return;
+    }
+    // Oldest first, so the just-written file is the last candidate to go.
+    entries.sort_by_key(|(_, _, modified)| *modified);
+    for (path, len, _) in entries {
+        if total <= budget_bytes {
+            break;
+        }
+        if std::fs::remove_file(&path).is_ok() {
+            total = total.saturating_sub(len);
+        }
+    }
+}
+
 /// Blob-cache bookkeeping: which blobs have local files, which fetches are
 /// already in flight.
 pub struct MediaCache {
@@ -258,6 +338,76 @@ mod tests {
         assert!(hostile.ends_with("named/abcdef12-passwd"));
         assert!(hostile.starts_with(&cache));
 
+        Ok(())
+    }
+
+    #[test]
+    fn size_caps_apply_to_photos_and_videos_only() {
+        assert_eq!(max_bytes_for_kind(MediaKind::Photo), Some(15 * 1024 * 1024));
+        assert_eq!(
+            max_bytes_for_kind(MediaKind::Video),
+            Some(200 * 1024 * 1024)
+        );
+        assert_eq!(max_bytes_for_kind(MediaKind::Audio), None);
+        assert_eq!(max_bytes_for_kind(MediaKind::File), None);
+    }
+
+    #[test]
+    fn prune_cached_removes_the_file_and_tolerates_absence() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let blob = "abc123def456";
+        std::fs::write(dir.path().join(blob), b"payload")?;
+
+        prune_cached(dir.path(), blob);
+        assert!(!dir.path().join(blob).exists());
+
+        // Idempotent: pruning an already-absent blob is a no-op.
+        prune_cached(dir.path(), blob);
+        Ok(())
+    }
+
+    #[test]
+    fn evict_to_budget_drops_oldest_first_until_under_budget() -> anyhow::Result<()> {
+        use std::time::{Duration, SystemTime};
+
+        let dir = tempfile::tempdir()?;
+        // Three 100-byte files, stamped oldest → newest.
+        let base = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
+        for (i, name) in ["old", "mid", "new"].iter().enumerate() {
+            std::fs::write(dir.path().join(name), vec![0u8; 100])?;
+            std::fs::File::open(dir.path().join(name))?
+                .set_modified(base + Duration::from_secs(i as u64 * 10))?;
+        }
+
+        // Budget holds ~1.5 files: the two oldest go, the newest survives.
+        evict_to_budget(dir.path(), 150, "new");
+        assert!(!dir.path().join("old").exists());
+        assert!(!dir.path().join("mid").exists());
+        assert!(dir.path().join("new").exists());
+        Ok(())
+    }
+
+    #[test]
+    fn evict_to_budget_under_budget_keeps_everything() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        std::fs::write(dir.path().join("a"), vec![0u8; 100])?;
+        std::fs::write(dir.path().join("b"), vec![0u8; 100])?;
+
+        evict_to_budget(dir.path(), 1024, "b");
+        assert!(dir.path().join("a").exists());
+        assert!(dir.path().join("b").exists());
+        Ok(())
+    }
+
+    #[test]
+    fn evict_to_budget_never_evicts_the_just_written_blob() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        // One file, larger than the whole budget: the pass must keep it rather
+        // than delete the very blob we are about to hand the UI.
+        std::fs::write(dir.path().join("huge"), vec![0u8; 1000])?;
+
+        evict_to_budget(dir.path(), 512, "huge");
+        assert!(dir.path().join("huge").exists());
         Ok(())
     }
 
