@@ -8,7 +8,6 @@ import '../actions.dart';
 import '../providers.dart';
 import '../rust/api/commands.dart';
 import '../rust/domain.dart';
-import '../theme/chrome.dart';
 import '../theme/tokens.dart';
 import '../time_format.dart';
 import 'jyn_avatar.dart';
@@ -118,6 +117,10 @@ class _ComposerState extends ConsumerState<Composer> {
   // only touches the lifetime when the user actually moved it.
   int? _editInitialLifetime;
 
+  /// The post's surviving original attachments while editing — the user
+  /// can remove them here; removals publish on save.
+  final List<MediaAttachment> _editKept = [];
+
   /// The five-step chip that best represents a post's current lifetime.
   static int? _nearestLifetime(ReducedPost post) {
     final expiresAt = post.expiresAt;
@@ -143,6 +146,10 @@ class _ComposerState extends ConsumerState<Composer> {
       setState(() {
         _visibility = next.visibility;
         _lifetimeSecs = _editInitialLifetime;
+        _attachments.clear();
+        _editKept
+          ..clear()
+          ..addAll(next.media);
         _expanded = true;
       });
       _focusNode.requestFocus();
@@ -157,19 +164,29 @@ class _ComposerState extends ConsumerState<Composer> {
     setState(() {
       _visibility = Visibility.circles;
       _lifetimeSecs = 24 * 3600;
+      _attachments.clear();
+      _editKept.clear();
       _expanded = false;
     });
   }
 
-  /// Publish only what changed: the body (marked as edited) and/or the
-  /// lifetime (a changed chip restarts the clock from now).
+  /// Publish only what changed: body/attachments through the edit op
+  /// (marked as edited), a moved lifetime chip via setPostLifetime
+  /// (restarting the clock from now).
   Future<void> _saveEdit(ReducedPost editing) async {
     final body = _body.text.trim();
-    if (body.isEmpty && editing.media.isEmpty) return;
+    if (body.isEmpty && _editKept.isEmpty && _attachments.isEmpty) return;
+    final mediaChanged =
+        _attachments.isNotEmpty || _editKept.length != editing.media.length;
     setState(() => _casting = true);
     await runGuarded(context, () async {
-      if (body != editing.body) {
-        await editPost(postId: editing.postId, body: body);
+      if (body != editing.body || mediaChanged) {
+        await editPost(
+          postId: editing.postId,
+          body: body,
+          keptMedia: List.of(_editKept),
+          newMedia: List.of(_attachments),
+        );
       }
       if (_lifetimeSecs != _editInitialLifetime) {
         await setPostLifetime(
@@ -375,7 +392,11 @@ class _ComposerState extends ConsumerState<Composer> {
             onTapOutside: (_) {},
             onChanged: (_) => setState(() {}),
           ),
-          if (!isEditing && _attachments.isNotEmpty) ...[
+          if (isEditing && _editKept.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            _keptAttachmentList(),
+          ],
+          if (_attachments.isNotEmpty) ...[
             const SizedBox(height: 8),
             _attachmentList(),
           ],
@@ -393,31 +414,11 @@ class _ComposerState extends ConsumerState<Composer> {
           const SizedBox(height: 12),
           Row(
             children: [
-              if (isEditing)
-                // Attachments travel with the original cast; freeze them.
-                Upcoming(
-                  message: 'attachments can’t be edited yet',
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      _attachButton(),
-                      const SizedBox(width: 4),
-                      const Icon(
-                        Icons.mic_none,
-                        size: 22,
-                        color: JynColors.slate,
-                      ),
-                    ],
-                  ),
-                )
-              else ...[
-                _attachButton(),
-                const SizedBox(width: 4),
-                VoiceRecorderButton(
-                  onRecorded: (draft) =>
-                      setState(() => _attachments.add(draft)),
-                ),
-              ],
+              _attachButton(),
+              const SizedBox(width: 4),
+              VoiceRecorderButton(
+                onRecorded: (draft) => setState(() => _attachments.add(draft)),
+              ),
               const SizedBox(width: 6),
               Expanded(
                 child: Text(
@@ -439,7 +440,8 @@ class _ComposerState extends ConsumerState<Composer> {
                   enabled:
                       !_casting &&
                       (_body.text.trim().isNotEmpty ||
-                          editing.media.isNotEmpty),
+                          _editKept.isNotEmpty ||
+                          _attachments.isNotEmpty),
                   onTap: () => _saveEdit(editing),
                 ),
               ] else
@@ -448,6 +450,70 @@ class _ComposerState extends ConsumerState<Composer> {
           ),
         ],
       ),
+    );
+  }
+
+  /// The post's original attachments while editing: one chip each, with a
+  /// remove affordance. Removals publish on save.
+  Widget _keptAttachmentList() {
+    return Wrap(
+      spacing: 8,
+      runSpacing: 6,
+      children: [
+        for (final (index, attachment) in _editKept.indexed)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: JynColors.field,
+              borderRadius: BorderRadius.circular(JynRadii.attach),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  switch (attachment.kind) {
+                    MediaKind.photo => Icons.image_outlined,
+                    MediaKind.video => Icons.videocam_outlined,
+                    MediaKind.audio => Icons.mic_none,
+                    MediaKind.file => Icons.attach_file,
+                  },
+                  size: 14,
+                  color: JynColors.slate,
+                ),
+                const SizedBox(width: 6),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 180),
+                  child: Text(
+                    attachment.fileName ??
+                        switch (attachment.kind) {
+                          MediaKind.photo => 'photo',
+                          MediaKind.video => 'video',
+                          MediaKind.audio => 'voice note',
+                          MediaKind.file => 'file',
+                        },
+                    overflow: TextOverflow.ellipsis,
+                    style: JynType.body.copyWith(fontSize: 12.5),
+                  ),
+                ),
+                const SizedBox(width: 4),
+                Tooltip(
+                  message: 'remove (publishes on save)',
+                  child: MouseRegion(
+                    cursor: SystemMouseCursors.click,
+                    child: GestureDetector(
+                      onTap: () => setState(() => _editKept.removeAt(index)),
+                      child: const Icon(
+                        Icons.close,
+                        size: 14,
+                        color: JynColors.secondary,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
     );
   }
 

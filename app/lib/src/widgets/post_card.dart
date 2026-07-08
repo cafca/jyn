@@ -150,12 +150,12 @@ class _PostCardState extends ConsumerState<PostCard> {
         ],
         if (post.isSelf)
           // Own posts open in the composer for editing — body, lifetime,
-          // and delete all live there.
+          // attachments, and delete all live there.
           _ActionIcon(
-            icon: Icons.edit_outlined,
-            size: 18,
+            icon: Icons.more_horiz,
+            size: 20,
             color: JynColors.secondary,
-            tooltip: 'edit',
+            tooltip: 'edit post',
             onTap: () =>
                 ref.read(editingPostProvider.notifier).start(post.post),
           ),

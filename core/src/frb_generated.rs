@@ -106,12 +106,21 @@ fn wire__crate__api__commands__edit_post_impl(
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             let api_post_id = <String>::sse_decode(&mut deserializer);
             let api_body = <String>::sse_decode(&mut deserializer);
+            let api_kept_media =
+                <Vec<crate::domain::MediaAttachment>>::sse_decode(&mut deserializer);
+            let api_new_media =
+                <Vec<crate::api::commands::MediaDraftInput>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
                     (move || async move {
-                        let output_ok =
-                            crate::api::commands::edit_post(api_post_id, api_body).await?;
+                        let output_ok = crate::api::commands::edit_post(
+                            api_post_id,
+                            api_body,
+                            api_kept_media,
+                            api_new_media,
+                        )
+                        .await?;
                         Ok(output_ok)
                     })()
                     .await,

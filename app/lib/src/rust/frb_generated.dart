@@ -93,6 +93,8 @@ abstract class RustLibApi extends BaseApi {
   Future<void> crateApiCommandsEditPost({
     required String postId,
     required String body,
+    required List<MediaAttachment> keptMedia,
+    required List<MediaDraftInput> newMedia,
   });
 
   Stream<JynEvent> crateApiLifecycleEvents();
@@ -222,6 +224,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   Future<void> crateApiCommandsEditPost({
     required String postId,
     required String body,
+    required List<MediaAttachment> keptMedia,
+    required List<MediaDraftInput> newMedia,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -229,6 +233,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_String(postId, serializer);
           sse_encode_String(body, serializer);
+          sse_encode_list_media_attachment(keptMedia, serializer);
+          sse_encode_list_media_draft_input(newMedia, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -241,14 +247,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: sse_decode_AnyhowException,
         ),
         constMeta: kCrateApiCommandsEditPostConstMeta,
-        argValues: [postId, body],
+        argValues: [postId, body, keptMedia, newMedia],
         apiImpl: this,
       ),
     );
   }
 
-  TaskConstMeta get kCrateApiCommandsEditPostConstMeta =>
-      const TaskConstMeta(debugName: "edit_post", argNames: ["postId", "body"]);
+  TaskConstMeta get kCrateApiCommandsEditPostConstMeta => const TaskConstMeta(
+    debugName: "edit_post",
+    argNames: ["postId", "body", "keptMedia", "newMedia"],
+  );
 
   @override
   Stream<JynEvent> crateApiLifecycleEvents() {

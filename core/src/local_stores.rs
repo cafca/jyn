@@ -69,12 +69,18 @@ impl PrivatePostsStore {
         self.save(&posts)
     }
 
-    pub fn edit_body(&self, post_id: &str, body: impl Into<String>) -> Result<bool> {
+    pub fn edit(
+        &self,
+        post_id: &str,
+        body: impl Into<String>,
+        media: Vec<crate::domain::MediaAttachment>,
+    ) -> Result<bool> {
         let mut posts = self.list()?;
         let Some(post) = posts.iter_mut().find(|post| post.post_id == post_id) else {
             return Ok(false);
         };
         post.body = body.into();
+        post.media = media;
         post.edited = true;
         self.save(&posts)?;
         Ok(true)
@@ -265,12 +271,13 @@ mod tests {
         store.upsert(post("p-2", Visibility::Private, None))?;
         assert_eq!(store.list()?.len(), 2);
 
-        assert!(store.edit_body("p-1", "revised")?);
+        assert!(store.edit("p-1", "revised", vec![])?);
         assert!(store.set_lifetime("p-2", Some(50))?);
         let posts = store.list()?;
         let p1 = posts.iter().find(|p| p.post_id == "p-1").unwrap();
         assert_eq!(p1.body, "revised");
         assert!(p1.edited);
+        assert!(p1.media.is_empty());
 
         // Draining at 50 removes p-2 (expires_at 50) but keeps p-1 (expires 100).
         let drained = store.drain_expired(50)?;
