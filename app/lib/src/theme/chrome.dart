@@ -72,20 +72,23 @@ class JynToolbar extends StatelessWidget {
       ),
       child: Row(
         children: [
-          if (showBack)
-            _HoverIcon(
-              icon: Icons.chevron_left,
-              tooltip: 'back',
-              onTap: () => Navigator.of(context).maybePop(),
-            ),
-          if (showBack) const SizedBox(width: 4),
+          // The wordmark holds the same leftmost spot on every screen;
+          // the back chevron slots in after it.
           JynWordmark(
             onTap:
                 onWordmarkTap ??
                 () => Navigator.of(context).popUntil((r) => r.isFirst),
           ),
+          if (showBack) ...[
+            const SizedBox(width: 10),
+            _HoverIcon(
+              icon: Icons.chevron_left,
+              tooltip: 'back',
+              onTap: () => Navigator.of(context).maybePop(),
+            ),
+          ],
           if (title != null) ...[
-            const SizedBox(width: 14),
+            SizedBox(width: showBack ? 4 : 14),
             Text(
               title!,
               style: JynType.name.copyWith(color: JynColors.textSoft),

@@ -9,7 +9,6 @@ import '../theme/tokens.dart';
 import '../widgets/composer.dart';
 import '../widgets/jyn_avatar.dart';
 import '../widgets/post_card.dart';
-import 'profile_screen.dart';
 
 /// The river (`5a`): a single immersive 440px column of posts on the
 /// near-white ground, chrome pared back to wordmark, search and profile,
@@ -67,11 +66,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   displayName: profile?.displayName ?? '',
                   size: 30,
                   isSelf: true,
-                  onTap: () => Navigator.of(context).push(
-                    MaterialPageRoute<void>(
-                      builder: (_) => const ProfileScreen(),
-                    ),
-                  ),
+                  onTap: profile == null
+                      ? null
+                      : () => openUserProfile(
+                          context,
+                          ref,
+                          profileId: profile.profileId,
+                          displayName: profile.displayName,
+                        ),
                 ),
               ),
             ],

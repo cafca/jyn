@@ -12,21 +12,29 @@ import 'screens/user_profile_screen.dart';
 
 /// Clicking any avatar or name lands on that person's profile — the local
 /// user's own profile screen for self, a read view for everyone else.
+/// Already looking at that profile? Then it's a no-op, not another layer.
 void openUserProfile(
   BuildContext context,
   WidgetRef ref, {
   required String profileId,
   required String displayName,
 }) {
+  final routeName = profileRouteName(profileId);
+  if (ModalRoute.of(context)?.settings.name == routeName) return;
   final isSelf = ref.read(profileProvider)?.profileId == profileId;
   Navigator.of(context).push(
     MaterialPageRoute<void>(
+      settings: RouteSettings(name: routeName),
       builder: (_) => isSelf
           ? const ProfileScreen()
           : UserProfileScreen(profileId: profileId, displayName: displayName),
     ),
   );
 }
+
+/// Route identity for a profile page, so re-taps on the same person's
+/// avatar/name don't stack duplicates.
+String profileRouteName(String profileId) => 'jyn-profile:$profileId';
 
 /// Runs a user action; failures land in a snackbar instead of crashing.
 Future<void> runGuarded(
