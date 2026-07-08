@@ -4,99 +4,159 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../actions.dart';
 import '../providers.dart';
 import '../rust/api/commands.dart';
+import '../theme/chrome.dart';
+import '../theme/tokens.dart';
 import '../widgets/composer.dart';
+import '../widgets/jyn_avatar.dart';
 import '../widgets/post_card.dart';
-import 'diagnostics_screen.dart';
-import 'friends_screen.dart';
 import 'profile_screen.dart';
-import 'settings_screen.dart';
 
-/// The river: composer on top, posts flowing down, ghost doors at the end.
-class HomeScreen extends ConsumerWidget {
-  const HomeScreen({super.key});
+/// The river (`5a`): a single immersive 440px column of posts on the
+/// near-white ground, chrome pared back to wordmark, search and profile,
+/// with the floating cast bar pinned bottom-center.
+class HomeScreen extends ConsumerStatefulWidget {
+  const HomeScreen({super.key, this.composerExpanded = false});
+
+  /// Boot with the composer expanded (screenshot harness only).
+  final bool composerExpanded;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends ConsumerState<HomeScreen> {
+  final _scroll = ScrollController();
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  void _scrollToTop() {
+    if (!_scroll.hasClients) return;
+    _scroll.animateTo(
+      0,
+      duration: const Duration(milliseconds: 350),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final posts = ref.watch(riverPostsProvider);
     final ghosts = ref.watch(ghostsProvider);
+    final profile = ref.watch(profileProvider);
     final pendingCount = ref.watch(pendingRequestsProvider).length;
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('jyn'),
-        actions: [
-          IconButton(
-            tooltip: 'friends',
-            onPressed: () => _push(context, const FriendsScreen()),
-            icon: Badge(
-              isLabelVisible: pendingCount > 0,
-              label: Text('$pendingCount'),
-              child: const Icon(Icons.group_outlined),
-            ),
+      body: Column(
+        children: [
+          const JynTitlebarStrip(),
+          JynToolbar(
+            onWordmarkTap: _scrollToTop,
+            actions: [
+              const JynSearchField(),
+              const SizedBox(width: 14),
+              Badge(
+                isLabelVisible: pendingCount > 0,
+                backgroundColor: JynColors.accept,
+                smallSize: 8,
+                child: JynAvatar(
+                  profileId: profile?.profileId ?? '',
+                  displayName: profile?.displayName ?? '',
+                  size: 30,
+                  isSelf: true,
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => const ProfileScreen(),
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
-          IconButton(
-            tooltip: 'profile',
-            onPressed: () => _push(context, const ProfileScreen()),
-            icon: const Icon(Icons.person_outline),
-          ),
-          IconButton(
-            tooltip: 'diagnostics',
-            onPressed: () => _push(context, const DiagnosticsScreen()),
-            icon: const Icon(Icons.monitor_heart_outlined),
-          ),
-          IconButton(
-            tooltip: 'settings',
-            onPressed: () => _push(context, const SettingsScreen()),
-            icon: const Icon(Icons.settings_outlined),
-          ),
-        ],
-      ),
-      body: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 640),
-          child: ListView(
-            padding: const EdgeInsets.all(12),
-            children: [
-              const Composer(),
-              const SizedBox(height: 12),
-              if (posts.isEmpty)
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 48),
+          Expanded(
+            child: Stack(
+              children: [
+                Positioned.fill(
                   child: Center(
-                    child: Text(
-                      'the river is quiet',
-                      style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                        color: Theme.of(context).colorScheme.outline,
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(
+                        maxWidth: JynLayout.column,
+                      ),
+                      child: ListView(
+                        controller: _scroll,
+                        // Clear the floating composer at the bottom.
+                        padding: const EdgeInsets.only(top: 2, bottom: 150),
+                        children: [
+                          if (posts.isEmpty && ghosts.isEmpty)
+                            Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 64),
+                              child: Center(
+                                child: Text(
+                                  'the river is quiet',
+                                  style: JynType.body.copyWith(
+                                    color: JynColors.muted,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          for (final (index, post) in posts.indexed) ...[
+                            if (index > 0) const JynHairline(faint: true),
+                            PostCard(post: post),
+                          ],
+                          for (final ghost in ghosts) ...[
+                            const JynHairline(faint: true),
+                            _GhostDoor(
+                              carrier: ghost.carrierDisplayName,
+                              authorProfileId: ghost.authorProfileId,
+                            ),
+                          ],
+                        ],
                       ),
                     ),
                   ),
                 ),
-              for (final post in posts)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: PostCard(post: post),
-                ),
-              for (final ghost in ghosts)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: _GhostDoor(
-                    carrier: ghost.carrierDisplayName,
-                    authorProfileId: ghost.authorProfileId,
+                // The feed dissolves under the floating pill.
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  height: 130,
+                  child: IgnorePointer(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [
+                            JynColors.body.withValues(alpha: 0),
+                            JynColors.body,
+                          ],
+                        ),
+                      ),
+                    ),
                   ),
                 ),
-            ],
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 18,
+                  child: Center(
+                    child: Composer(startExpanded: widget.composerExpanded),
+                  ),
+                ),
+              ],
+            ),
           ),
-        ),
+        ],
       ),
     );
   }
-
-  void _push(BuildContext context, Widget screen) {
-    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => screen));
-  }
 }
 
-/// A friend's heart on a stranger's post: a greyed-out door, not content.
+/// A friend's heart on a stranger's post: a quiet door, not content.
 class _GhostDoor extends StatelessWidget {
   const _GhostDoor({required this.carrier, required this.authorProfileId});
 
@@ -105,26 +165,62 @@ class _GhostDoor extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Card(
-      color: scheme.surfaceContainerHighest.withValues(alpha: 0.5),
-      child: ListTile(
-        leading: Icon(Icons.door_front_door_outlined, color: scheme.outline),
-        title: Text(
-          '$carrier hearted a post by ${shortId(authorProfileId)}…',
-          style: TextStyle(color: scheme.outline),
-        ),
-        subtitle: Text(
-          'not a friend yet — knock?',
-          style: TextStyle(color: scheme.outline),
-        ),
-        trailing: OutlinedButton(
-          onPressed: () => runGuarded(
-            context,
-            () => requestFriendshipById(profileId: authorProfileId),
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 14),
+      child: Row(
+        children: [
+          const Icon(
+            Icons.door_front_door_outlined,
+            size: 22,
+            color: JynColors.muted,
           ),
-          child: const Text('request'),
-        ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '$carrier hearted a post by ${shortId(authorProfileId)}…',
+                  style: JynType.body.copyWith(
+                    fontSize: 13,
+                    color: JynColors.secondary,
+                  ),
+                ),
+                Text(
+                  'not a friend yet — knock?',
+                  style: JynType.meta.copyWith(color: JynColors.muted),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          MouseRegion(
+            cursor: SystemMouseCursors.click,
+            child: GestureDetector(
+              onTap: () => runGuarded(
+                context,
+                () => requestFriendshipById(profileId: authorProfileId),
+              ),
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 5,
+                ),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(color: JynColors.chipOutline),
+                ),
+                child: Text(
+                  'request',
+                  style: JynType.body.copyWith(
+                    fontSize: 12.5,
+                    color: JynColors.mid,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

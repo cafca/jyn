@@ -1,5 +1,10 @@
-/// Lifetime formatting for the river's countdown pills. Port of the core's
-/// former `time_format.rs`; keep thresholds in sync with the design.
+/// Lifetime formatting for the river's countdown rings and pills.
+///
+/// Urgency is *relative* to a post's original lifetime (the design's ring
+/// fraction is `remaining / originalLifetime`): the amber "draining"
+/// treatment kicks in over the final fifth, critical over the final
+/// twentieth — a 6h post and a 1-year post both drain over their own last
+/// stretch rather than at a fixed wall-clock threshold.
 library;
 
 /// How urgently a post's remaining lifetime should read.
@@ -8,47 +13,59 @@ enum UrgencyTier {
   settled,
   normal,
 
-  /// Less than six hours left: the warm/amber treatment.
+  /// The final fifth of the post's lifetime: the amber treatment.
   warm,
 
-  /// Less than one hour left.
+  /// The final twentieth (or already expired).
   critical,
 }
 
-const int _warmThresholdSecs = 6 * 3600;
-const int _criticalThresholdSecs = 3600;
+const double _warmFraction = 0.20;
+const double _criticalFraction = 0.05;
 
-typedef RemainingLabel = ({String label, UrgencyTier tier});
+typedef LifetimeState = ({String label, UrgencyTier tier, double fraction});
 
-/// Formats the remaining lifetime of a post ("34h", "4h12m", "58m", "<1m")
-/// with its urgency tier. `expiresAt <= now` renders as "ebbing away".
-RemainingLabel formatRemaining(int now, int expiresAt) {
+/// Remaining-lifetime label, urgency tier, and ring fraction (0..1) for an
+/// ebbing post. `expiresAt <= now` renders as "ebbing away" at fraction 0.
+LifetimeState lifetimeState({
+  required int now,
+  required int createdAt,
+  required int expiresAt,
+}) {
   final remaining = expiresAt - now;
   if (remaining <= 0) {
-    return (label: 'ebbing away', tier: UrgencyTier.critical);
+    return (label: 'ebbing away', tier: UrgencyTier.critical, fraction: 0);
   }
-
-  final tier = remaining < _criticalThresholdSecs
+  final original = expiresAt - createdAt;
+  final fraction = original > 0 ? (remaining / original).clamp(0.0, 1.0) : 0.0;
+  final tier = fraction <= _criticalFraction
       ? UrgencyTier.critical
-      : remaining < _warmThresholdSecs
+      : fraction <= _warmFraction
       ? UrgencyTier.warm
       : UrgencyTier.normal;
+  return (label: formatRemaining(remaining), tier: tier, fraction: fraction);
+}
 
-  final String label;
-  if (remaining >= 48 * 3600) {
-    label = '${remaining ~/ (24 * 3600)}d';
-  } else if (remaining >= 10 * 3600) {
-    label = '${remaining ~/ 3600}h';
-  } else if (remaining >= 3600) {
+/// Formats a remaining duration in seconds: "3d", "34h", "4h12m", "58m",
+/// "<1m".
+String formatRemaining(int remaining) {
+  if (remaining >= 48 * 3600) return '${remaining ~/ (24 * 3600)}d';
+  if (remaining >= 10 * 3600) return '${remaining ~/ 3600}h';
+  if (remaining >= 3600) {
     final minutes = (remaining % 3600) ~/ 60;
-    label = '${remaining ~/ 3600}h${minutes.toString().padLeft(2, '0')}m';
-  } else if (remaining >= 60) {
-    label = '${remaining ~/ 60}m';
-  } else {
-    label = '<1m';
+    return '${remaining ~/ 3600}h${minutes.toString().padLeft(2, '0')}m';
   }
+  if (remaining >= 60) return '${remaining ~/ 60}m';
+  return '<1m';
+}
 
-  return (label: label, tier: tier);
+/// Compact age for author rows: "now", "5m", "2h", "3d".
+String formatAge(int now, int createdAt) {
+  final age = now - createdAt;
+  if (age < 60) return 'now';
+  if (age < 3600) return '${age ~/ 60}m';
+  if (age < 48 * 3600) return '${age ~/ 3600}h';
+  return '${age ~/ (24 * 3600)}d';
 }
 
 int nowUnixSecs() => DateTime.now().millisecondsSinceEpoch ~/ 1000;

@@ -4,9 +4,11 @@ import 'package:flutter/material.dart' hide Visibility;
 import 'package:video_player/video_player.dart';
 
 import '../rust/domain.dart';
+import '../theme/tokens.dart';
 
 /// Inline video: a poster-less tap-to-play frame once the blob is local,
-/// a downloading placeholder before.
+/// a downloading placeholder before. Fills whatever frame the parent
+/// provides (the feed's 4:5 tile), cover-cropping the video.
 class VideoAttachment extends StatefulWidget {
   const VideoAttachment({
     super.key,
@@ -65,68 +67,56 @@ class _VideoAttachmentState extends State<VideoAttachment> {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     final controller = _controller;
-    final aspect = _aspect();
 
     if (controller == null || !controller.value.isInitialized) {
-      return ClipRRect(
-        borderRadius: BorderRadius.circular(8),
-        child: AspectRatio(
-          aspectRatio: aspect,
-          child: Container(
-            color: scheme.surfaceContainerHighest,
-            child: Center(
-              child: widget.path == null
-                  ? const Icon(Icons.downloading)
-                  : const CircularProgressIndicator(),
-            ),
-          ),
+      return Container(
+        color: JynColors.cardGrey,
+        child: Center(
+          child: widget.path == null
+              ? const Icon(Icons.downloading, color: JynColors.muted)
+              : const CircularProgressIndicator(color: JynColors.mid),
         ),
       );
     }
 
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(8),
-      child: AspectRatio(
-        aspectRatio: controller.value.aspectRatio,
-        child: Stack(
-          alignment: Alignment.center,
-          children: [
-            VideoPlayer(controller),
-            ValueListenableBuilder(
-              valueListenable: controller,
-              builder: (context, value, _) {
-                if (value.isPlaying) {
-                  return GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onTap: controller.pause,
-                    child: const SizedBox.expand(),
-                  );
-                }
-                return IconButton(
-                  iconSize: 56,
-                  onPressed: controller.play,
-                  icon: Icon(
-                    Icons.play_circle_filled,
-                    color: Colors.white.withValues(alpha: 0.9),
-                    shadows: const [Shadow(blurRadius: 8)],
-                  ),
-                );
-              },
-            ),
-          ],
+    final videoSize = controller.value.size;
+    return Stack(
+      alignment: Alignment.center,
+      fit: StackFit.expand,
+      children: [
+        // Cover-crop the video into the parent's frame.
+        FittedBox(
+          fit: BoxFit.cover,
+          clipBehavior: Clip.hardEdge,
+          child: SizedBox(
+            width: videoSize.width,
+            height: videoSize.height,
+            child: VideoPlayer(controller),
+          ),
         ),
-      ),
+        ValueListenableBuilder(
+          valueListenable: controller,
+          builder: (context, value, _) {
+            if (value.isPlaying) {
+              return GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: controller.pause,
+                child: const SizedBox.expand(),
+              );
+            }
+            return IconButton(
+              iconSize: 56,
+              onPressed: controller.play,
+              icon: Icon(
+                Icons.play_circle_filled,
+                color: Colors.white.withValues(alpha: 0.9),
+                shadows: const [Shadow(blurRadius: 8)],
+              ),
+            );
+          },
+        ),
+      ],
     );
-  }
-
-  double _aspect() {
-    final width = widget.attachment.width;
-    final height = widget.attachment.height;
-    if (width != null && height != null && height > 0) {
-      return (width / height).clamp(0.5, 3.0);
-    }
-    return 16 / 9;
   }
 }

@@ -3,6 +3,9 @@ import 'package:flutter/material.dart' hide Visibility;
 import '../actions.dart';
 import '../rust/api/settings.dart' as rust;
 import '../rust/settings.dart';
+import '../theme/chrome.dart';
+import '../theme/tokens.dart';
+import 'diagnostics_screen.dart';
 
 /// Node settings. Relay and mDNS changes persist immediately and take
 /// effect on the next app start.
@@ -45,92 +48,118 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     final settings = _settings;
     return Scaffold(
-      appBar: AppBar(title: const Text('settings')),
-      body: settings == null
-          ? const Center(child: CircularProgressIndicator())
-          : Center(
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 640),
-                child: ListView(
-                  padding: const EdgeInsets.all(16),
-                  children: [
-                    Text(
-                      'Changes take effect on the next app start.',
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.outline,
-                      ),
+      body: Column(
+        children: [
+          const JynTitlebarStrip(),
+          const JynToolbar(showBack: true, title: 'Settings'),
+          Expanded(child: _body(settings)),
+        ],
+      ),
+    );
+  }
+
+  Widget _body(rust.SettingsView? settings) {
+    return settings == null
+        ? const Center(child: CircularProgressIndicator())
+        : Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: JynLayout.column),
+              child: ListView(
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                children: [
+                  Text(
+                    'Changes take effect on the next app start.',
+                    style: JynType.body.copyWith(
+                      fontSize: 12.5,
+                      color: JynColors.secondary,
                     ),
-                    const SizedBox(height: 8),
-                    SwitchListTile(
-                      title: const Text('local peer discovery (mDNS)'),
-                      subtitle: const Text(
-                        'find friends on the same network without a relay',
-                      ),
-                      value: settings.mdnsEnabled,
-                      onChanged: (enabled) =>
-                          _apply(() => rust.setMdnsEnabled(enabled: enabled)),
+                  ),
+                  const SizedBox(height: 8),
+                  SwitchListTile(
+                    title: const Text('local peer discovery (mDNS)'),
+                    subtitle: const Text(
+                      'find friends on the same network without a relay',
                     ),
-                    const Divider(height: 32),
-                    Text('relay', style: theme.textTheme.titleSmall),
-                    RadioGroup<RelayMode>(
-                      groupValue: settings.relayMode,
-                      onChanged: (mode) {
-                        if (mode == null) return;
-                        _apply(
-                          () => rust.setRelayConfig(
-                            relayMode: mode,
-                            customRelayUrl: mode == RelayMode.relay
-                                ? _relayUrl.text.trim()
-                                : null,
-                          ),
-                        );
-                      },
-                      child: Column(
-                        children: [
-                          const RadioListTile<RelayMode>(
-                            title: Text('testing relay (iroh EU)'),
-                            value: RelayMode.testingRelay,
-                          ),
-                          const RadioListTile<RelayMode>(
-                            title: Text('custom relay'),
-                            value: RelayMode.relay,
-                          ),
-                          if (settings.relayMode == RelayMode.relay ||
-                              _relayUrl.text.isNotEmpty)
-                            Padding(
-                              padding: const EdgeInsets.only(
-                                left: 16,
-                                bottom: 8,
+                    value: settings.mdnsEnabled,
+                    onChanged: (enabled) =>
+                        _apply(() => rust.setMdnsEnabled(enabled: enabled)),
+                  ),
+                  const Divider(height: 32),
+                  const Text('relay', style: JynType.name),
+                  RadioGroup<RelayMode>(
+                    groupValue: settings.relayMode,
+                    onChanged: (mode) {
+                      if (mode == null) return;
+                      _apply(
+                        () => rust.setRelayConfig(
+                          relayMode: mode,
+                          customRelayUrl: mode == RelayMode.relay
+                              ? _relayUrl.text.trim()
+                              : null,
+                        ),
+                      );
+                    },
+                    child: Column(
+                      children: [
+                        const RadioListTile<RelayMode>(
+                          title: Text('testing relay (iroh EU)'),
+                          value: RelayMode.testingRelay,
+                        ),
+                        const RadioListTile<RelayMode>(
+                          title: Text('custom relay'),
+                          value: RelayMode.relay,
+                        ),
+                        if (settings.relayMode == RelayMode.relay ||
+                            _relayUrl.text.isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(left: 16, bottom: 8),
+                            child: TextField(
+                              controller: _relayUrl,
+                              decoration: const InputDecoration(
+                                labelText: 'relay URL (https://…)',
+                                isDense: true,
+                                border: OutlineInputBorder(),
                               ),
-                              child: TextField(
-                                controller: _relayUrl,
-                                decoration: const InputDecoration(
-                                  labelText: 'relay URL (https://…)',
-                                  isDense: true,
-                                  border: OutlineInputBorder(),
-                                ),
-                                onSubmitted: (url) => _apply(
-                                  () => rust.setRelayConfig(
-                                    relayMode: RelayMode.relay,
-                                    customRelayUrl: url.trim(),
-                                  ),
+                              onSubmitted: (url) => _apply(
+                                () => rust.setRelayConfig(
+                                  relayMode: RelayMode.relay,
+                                  customRelayUrl: url.trim(),
                                 ),
                               ),
                             ),
-                          const RadioListTile<RelayMode>(
-                            title: Text('no relay (local network only)'),
-                            value: RelayMode.disabled,
                           ),
-                        ],
+                        const RadioListTile<RelayMode>(
+                          title: Text('no relay (local network only)'),
+                          value: RelayMode.disabled,
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Divider(height: 32),
+                  // Diagnostics moved off the top-level toolbar; it lives
+                  // here now.
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(
+                      Icons.monitor_heart_outlined,
+                      color: JynColors.slate,
+                    ),
+                    title: const Text('diagnostics'),
+                    subtitle: const Text(
+                      'node identity, peers, gossip, history',
+                    ),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => const DiagnosticsScreen(),
                       ),
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
             ),
-    );
+          );
   }
 }

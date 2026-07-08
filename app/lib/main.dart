@@ -12,9 +12,18 @@ import 'src/rust/api/lifecycle.dart';
 import 'src/rust/frb_generated.dart';
 import 'src/screens/home_screen.dart';
 import 'src/screens/onboarding_screen.dart';
+import 'src/shot/shot.dart';
+import 'src/theme/tokens.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Screenshot harness: boot a named screen on fixture data, capture a
+  // PNG, exit. Never reachable without JYN_SHOT (see src/shot/shot.dart).
+  final shot = shotScreen();
+  if (shot != null) {
+    await runShot(shot);
+    return;
+  }
   await RustLib.init(externalLibrary: await _loadCore());
   await _initAutoUpdater();
   await startNode();
@@ -87,11 +96,8 @@ class _JynAppState extends State<JynApp> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'jyn',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF2A9D8F)),
-        useMaterial3: true,
-        visualDensity: VisualDensity.comfortable,
-      ),
+      // Light-only: the design specifies a single near-white palette.
+      theme: jynTheme(),
       home: const _Root(),
     );
   }
