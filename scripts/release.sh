@@ -42,6 +42,17 @@ if grep -q REPLACE_WITH_SPARKLE_ED_PUBLIC_KEY app/macos/Runner/Info.plist; then
   exit 1
 fi
 
+# Refuse to clobber an already-published version. A GitHub Release for the tag
+# is the source of truth for "published"; a dangling tag from a failed run is
+# fine to retry over. Bump VERSION to cut a new release, or set FORCE_RELEASE=1
+# to deliberately overwrite this one. Checked here, before the slow build.
+if [ "${FORCE_RELEASE:-0}" != "1" ] && gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+  echo "!! ${TAG} is already published on ${REPO}." >&2
+  echo "   Bump VERSION (and commit it) to release a new version," >&2
+  echo "   or set FORCE_RELEASE=1 to overwrite the published ${TAG}." >&2
+  exit 1
+fi
+
 # 1. Project VERSION into the Flutter build numbers.
 python3 scripts/release_tools.py sync-pubspec "$SEMVER" "$BUILD" app/pubspec.yaml
 
@@ -112,7 +123,7 @@ else
 fi
 
 # 8. Commit + push the appcast so GitHub Pages serves the new version.
-git add docs/appcast.xml app/pubspec.yaml
+git add VERSION docs/appcast.xml app/pubspec.yaml
 git commit -m "Release ${SEMVER}"
 git push origin HEAD
 
