@@ -181,3 +181,10 @@ pub async fn release_keep(post_author_profile_id: String, post_id: String) -> Re
     })
     .await
 }
+
+/// Writes an encrypted backup of identity-critical state (posts, group
+/// encryption keys, private posts, keeps) to `dest_path`. Only the recovery
+/// phrase can decrypt it.
+pub async fn export_backup(dest_path: String) -> Result<()> {
+    run(NetworkCommand::ExportBackup { dest_path }).await
+}

@@ -1,6 +1,9 @@
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart' hide Visibility;
 
 import '../actions.dart';
+import '../rust/api/commands.dart' as commands;
+import '../rust/api/lifecycle.dart' as lifecycle;
 import '../rust/api/settings.dart' as rust;
 import '../rust/settings.dart';
 import '../theme/chrome.dart';
@@ -44,6 +47,71 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _apply(Future<void> Function() change) async {
     await runGuarded(context, change);
     await _load();
+  }
+
+  Future<void> _showRecoveryPhrase() async {
+    final String phrase;
+    try {
+      phrase = await lifecycle.recoveryPhrase();
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.toString())));
+      }
+      return;
+    }
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('recovery phrase'),
+        content: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 380),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Anyone with these words can be you. Write them down '
+                'somewhere safe — together with a backup file they restore '
+                'everything.',
+                style: JynType.body.copyWith(
+                  fontSize: 12.5,
+                  color: JynColors.secondary,
+                ),
+              ),
+              const SizedBox(height: 12),
+              SelectableText(phrase, style: JynType.body),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('done'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _exportBackup() async {
+    final location = await getSaveLocation(
+      suggestedName: 'jyn.backup',
+      acceptedTypeGroups: const [
+        XTypeGroup(label: 'jyn backup', extensions: ['backup']),
+      ],
+    );
+    if (location == null || !mounted) return;
+    await runGuarded(
+      context,
+      () => commands.exportBackup(destPath: location.path),
+    );
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('backup written')),
+    );
   }
 
   @override
@@ -142,6 +210,34 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           ),
                         ],
                       ),
+                    ),
+                    const Divider(height: 32),
+                    const Text('backup', style: JynType.name),
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(
+                        Icons.key_outlined,
+                        color: JynColors.slate,
+                      ),
+                      title: const Text('recovery phrase'),
+                      subtitle: const Text(
+                        '24 words that recover your identity — keep them safe',
+                      ),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: _showRecoveryPhrase,
+                    ),
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(
+                        Icons.archive_outlined,
+                        color: JynColors.slate,
+                      ),
+                      title: const Text('export backup…'),
+                      subtitle: const Text(
+                        'encrypted snapshot of your posts and keys; '
+                        'restores with the recovery phrase',
+                      ),
+                      onTap: _exportBackup,
                     ),
                     const Divider(height: 32),
                     // Diagnostics moved off the top-level toolbar; it lives

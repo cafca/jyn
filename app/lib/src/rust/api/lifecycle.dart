@@ -37,3 +37,27 @@ Future<String> nodeDataDir() =>
 /// profile has loaded (wait for the first Profile event).
 Future<String> myFriendCode() =>
     RustLib.instance.api.crateApiLifecycleMyFriendCode();
+
+/// The 24-word recovery phrase for the local identity. It recovers the
+/// signing key and, with a backup archive, all encrypted content — treat it
+/// like the key it is.
+Future<String> recoveryPhrase() =>
+    RustLib.instance.api.crateApiLifecycleRecoveryPhrase();
+
+/// Whether this machine has no jyn identity yet (no `node.key` in the data
+/// directory). Callable before `start_node`; gates the restore-from-backup
+/// offer at first launch.
+Future<bool> isFreshInstall() =>
+    RustLib.instance.api.crateApiLifecycleIsFreshInstall();
+
+/// Restores a backup archive into the app's data directory using the
+/// recovery phrase. Must be called *before* `start_node` (fails once the
+/// node runs); the restored identity and content are live after the next
+/// `start_node`.
+Future<void> restoreBackup({
+  required String archivePath,
+  required String recoveryPhrase,
+}) => RustLib.instance.api.crateApiLifecycleRestoreBackup(
+  archivePath: archivePath,
+  recoveryPhrase: recoveryPhrase,
+);

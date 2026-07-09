@@ -133,6 +133,12 @@ Future<void> releaseKeep({
   postId: postId,
 );
 
+/// Writes an encrypted backup of identity-critical state (posts, group
+/// encryption keys, private posts, keeps) to `dest_path`. Only the recovery
+/// phrase can decrypt it.
+Future<void> exportBackup({required String destPath}) =>
+    RustLib.instance.api.crateApiCommandsExportBackup(destPath: destPath);
+
 /// A file staged on the composer. Voice notes carry the duration and
 /// waveform from [`crate::api::media::voice_note_summary`]; other files
 /// leave them empty. The media kind is derived from the file extension.
