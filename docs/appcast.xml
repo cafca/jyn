@@ -6,12 +6,12 @@
     <description>Updates for jyn.</description>
     <language>en</language>
     <item>
-      <title>0.1.0</title>
-      <pubDate>Wed, 08 Jul 2026 22:11:21 +0000</pubDate>
-      <sparkle:version>10</sparkle:version>
-      <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
+      <title>0.1.1</title>
+      <pubDate>Wed, 08 Jul 2026 23:54:56 +0000</pubDate>
+      <sparkle:version>13</sparkle:version>
+      <sparkle:shortVersionString>0.1.1</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>11.0</sparkle:minimumSystemVersion>
-      <enclosure url="https://github.com/cafca/jyn/releases/download/v0.1.0/jyn-0.1.0.zip" sparkle:edSignature="PFo65TjsTkYoYHF5HQDMsn/FZaVXlPwVyYxVAe9FXbTkUrcMZ07NgKCjujgLl4ZFMuwh4rc/TcOIWklOIsw4BA==" length="60221415" type="application/octet-stream" />
+      <enclosure url="https://github.com/cafca/jyn/releases/download/v0.1.1/jyn-0.1.1.zip" sparkle:edSignature="2f5/JGzNlNDfWtOb1hB/wkVLHZ+h6EfGbuvlhcSOmbqmeKIE7o1LBsYRh2GaAPWHG2AR0ndSWlCDrPviMDDACQ==" length="60259416" type="application/octet-stream" />
     </item>
   </channel>
 </rss>
