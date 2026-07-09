@@ -29,7 +29,9 @@ use p2panda_stream::ingest::ingest_operation;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
-const DOMAIN_TOPIC_NAMESPACE: &[u8] = b"jyn/domain/v1";
+// v2: the group-encryption flag day. Old plaintext clients stay on v1 topics
+// and never exchange operations with encrypted ones.
+const DOMAIN_TOPIC_NAMESPACE: &[u8] = b"jyn/domain/v2";
 const REDUCED_PROFILE_STATE_VERSION: u8 = 1;
 const DOMAIN_OPERATION_CACHE_VERSION: u8 = 1;
 
