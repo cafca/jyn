@@ -119,7 +119,7 @@ impl JynSpaces {
 
         let space_seed = hkdf::<32>(b"jyn/friends-space/v1", seed, None)
             .map_err(|err| anyhow::anyhow!("failed to derive friends space id: {err}"))?;
-        let my_space_id: SpaceId = Hash::digest(&space_seed);
+        let my_space_id: SpaceId = Hash::digest(space_seed);
 
         let domain = JynOperationDomain::new(store.clone());
         let spaces_store = JynSpacesStore::new(store);

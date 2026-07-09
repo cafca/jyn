@@ -718,6 +718,47 @@ async fn unpin_and_prune_prefix(state: &RuntimeState, prefix: &str) {
     }
 }
 
+/// Finds the per-blob decryption secret for a blob hash by scanning every
+/// post source that can reference it: our own stream, friends' streams,
+/// local private posts, and kept snapshots. `None` = plaintext (public) blob.
+async fn find_blob_secret(state: &RuntimeState, blob_hash: &str) -> Result<Option<Vec<u8>>> {
+    let secret_in = |posts: &[crate::domain::ReducedPost]| {
+        posts.iter().find_map(|post| {
+            post.media
+                .iter()
+                .find(|attachment| attachment.blob_hash == blob_hash)
+                .and_then(|attachment| attachment.blob_secret.clone())
+        })
+    };
+
+    let sync = state.sync.lock().await;
+    let local_state = sync.read_profile_state(&state.local_profile_id).await?;
+    if let Some(local) = &local_state {
+        if let Some(secret) = secret_in(&local.posts) {
+            return Ok(Some(secret));
+        }
+        for contact_id in &local.followed_profile_ids {
+            if let Some(contact) = sync.read_profile_state(contact_id).await? {
+                if let Some(secret) = secret_in(&contact.posts) {
+                    return Ok(Some(secret));
+                }
+            }
+        }
+    }
+    drop(sync);
+
+    if let Some(secret) = secret_in(&state.private_posts.list()?) {
+        return Ok(Some(secret));
+    }
+    let kept: Vec<crate::domain::ReducedPost> = state
+        .keeps
+        .list()?
+        .into_iter()
+        .map(|keep| keep.snapshot)
+        .collect();
+    Ok(secret_in(&kept))
+}
+
 async fn fetch_media(
     state: &RuntimeState,
     event_tx: &Sender<NetworkEvent>,
@@ -748,6 +789,16 @@ async fn fetch_media(
             .finish()
             .await
             .map_err(|err| anyhow::anyhow!("failed to export blob {blob_hash}: {err}"))?;
+        // Encrypted blob (non-public post): the store holds ciphertext, the
+        // cache holds plaintext. The per-blob secret comes from whichever
+        // post payload references this hash.
+        if let Some(secret) = find_blob_secret(state, &blob_hash).await? {
+            let ciphertext = std::fs::read(&path)
+                .with_context(|| format!("failed to read exported blob {blob_hash}"))?;
+            let plaintext = crate::media::blob_crypto::decrypt_blob(&ciphertext, &secret)?;
+            std::fs::write(&path, plaintext)
+                .with_context(|| format!("failed to write decrypted blob {blob_hash}"))?;
+        }
         crate::media::evict_to_budget(
             &state.media_cache_dir,
             crate::media::MEDIA_CACHE_BUDGET_BYTES,
@@ -1029,7 +1080,16 @@ async fn publish_post(
     let now = now_unix_secs();
     let post_id = new_post_id(&state.local_profile_id, now);
     let expires_at = draft.lifetime_secs.map(|secs| now + secs);
-    let media = import_attachments(state, event_tx, &post_id, &draft.media).await?;
+    // Everything non-public is sealed — including local-only Private posts,
+    // so their blobs are unreadable even if the content hash ever leaks.
+    let media = import_attachments(
+        state,
+        event_tx,
+        &post_id,
+        &draft.media,
+        draft.visibility != Visibility::Public,
+    )
+    .await?;
 
     if draft.visibility == Visibility::Private {
         state.private_posts.upsert(crate::domain::ReducedPost {
@@ -1072,11 +1132,17 @@ async fn publish_post(
 /// Imports staged files into the blob store, pins them under the post, and
 /// copies them into the media cache so the author's own UI renders them
 /// without a fetch.
+///
+/// With `encrypt` set (non-public posts), each file is sealed under a fresh
+/// per-blob key before it enters the store: the blob replicates as
+/// ciphertext, its content address is the ciphertext hash, and the key rides
+/// in the attachment metadata inside the group-encrypted post payload.
 async fn import_attachments(
     state: &RuntimeState,
     event_tx: &Sender<NetworkEvent>,
     post_id: &str,
     drafts: &[MediaDraft],
+    encrypt: bool,
 ) -> Result<Vec<crate::domain::MediaAttachment>> {
     let mut attachments = Vec::with_capacity(drafts.len());
     for media in drafts {
@@ -1093,6 +1159,19 @@ async fn import_attachments(
                 media.path.display()
             );
         }
+        let (import_path, blob_secret, _ciphertext_guard) = if encrypt {
+            let plaintext = std::fs::read(&media.path).with_context(|| {
+                format!("failed to read attachment {}", media.path.display())
+            })?;
+            let (ciphertext, secret) = crate::media::blob_crypto::encrypt_blob(&plaintext)?;
+            let sealed = tempfile::NamedTempFile::new()
+                .context("failed to create sealed attachment file")?;
+            std::fs::write(sealed.path(), &ciphertext)
+                .context("failed to write sealed attachment")?;
+            (sealed.path().to_path_buf(), Some(secret), Some(sealed))
+        } else {
+            (media.path.clone(), None, None)
+        };
         // Import under a single named pin. Awaiting add_path() directly would
         // also create an auto-tag that nothing ever cleans up, so the blob
         // would survive unpin forever; holding a temp tag while we set only
@@ -1101,7 +1180,7 @@ async fn import_attachments(
         let temp_tag = state
             .node
             .blobs
-            .add_path(&media.path)
+            .add_path(&import_path)
             .temp_tag()
             .await
             .map_err(|err| anyhow::anyhow!("failed to import {}: {err}", media.path.display()))?;
@@ -1116,6 +1195,8 @@ async fn import_attachments(
             .map_err(|err| anyhow::anyhow!("failed to pin attachment: {err}"))?;
         drop(temp_tag);
 
+        // The cache always holds plaintext (keyed by blob hash), so the
+        // author's UI renders without decrypting.
         std::fs::create_dir_all(&state.media_cache_dir).ok();
         let cached = state.media_cache_dir.join(&blob_hash);
         if !cached.exists() && std::fs::copy(&media.path, &cached).is_ok() {
@@ -1143,7 +1224,7 @@ async fn import_attachments(
                 .path
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned()),
-            blob_secret: None,
+            blob_secret,
         });
     }
     Ok(attachments)
@@ -1157,8 +1238,33 @@ async fn edit_post(
     kept_media: Vec<crate::domain::MediaAttachment>,
     new_media: Vec<MediaDraft>,
 ) -> Result<()> {
+    // Visibility decides whether new attachments are sealed, so resolve it
+    // before importing: local-only private posts and replicated non-public
+    // posts both get encrypted blobs.
+    let is_private = state
+        .private_posts
+        .list()?
+        .iter()
+        .any(|post| post.post_id == post_id);
+    let visibility = if is_private {
+        Visibility::Private
+    } else {
+        post_visibility(state, &state.local_profile_id, &post_id)
+            .await?
+            .unwrap_or(Visibility::Public)
+    };
+
     let mut media = kept_media;
-    media.extend(import_attachments(state, event_tx, &post_id, &new_media).await?);
+    media.extend(
+        import_attachments(
+            state,
+            event_tx,
+            &post_id,
+            &new_media,
+            visibility != Visibility::Public,
+        )
+        .await?,
+    );
     anyhow::ensure!(
         !body.trim().is_empty() || !media.is_empty(),
         "a post needs some words or something attached"
@@ -1174,9 +1280,6 @@ async fn edit_post(
         return Ok(());
     }
 
-    let visibility = post_visibility(state, &state.local_profile_id, &post_id)
-        .await?
-        .unwrap_or(Visibility::Public);
     let operation = DomainOperation::PostEdited {
         profile_id: state.local_profile_id.clone(),
         post_id,

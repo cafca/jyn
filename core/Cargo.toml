@@ -41,6 +41,7 @@ bytes = "1"
 
 # Platform
 directories = "5"
+tempfile = "3"
 
 # Media
 hound = "3.5"

@@ -148,7 +148,7 @@ impl JynSyncService {
         // creation) into live sync and pick up unprocessed backlog.
         let _ = service
             .spaces
-            .process_backlog(&[service.local_profile_id.clone()])
+            .process_backlog(std::slice::from_ref(&service.local_profile_id))
             .await;
         service.flush_spaces_outbox();
         let _ = service.sync_local_profile_peers().await;
