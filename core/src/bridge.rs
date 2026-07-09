@@ -106,6 +106,12 @@ pub enum NetworkCommand {
     /// Aligns friends-space membership (group encryption) with the current
     /// friends list. Idempotent; dispatched after state updates.
     ReconcileSpaces,
+    /// Writes an encrypted snapshot of identity-critical state (domain +
+    /// profile-data stores) to the given path. Decryptable only with the
+    /// recovery phrase.
+    ExportBackup {
+        dest_path: String,
+    },
     /// Automatic reaction when someone we requested started following us:
     /// follow back, making the friendship mutual.
     FollowBack {
@@ -158,7 +164,8 @@ impl NetworkCommand {
             | Self::SetHeart { .. }
             | Self::PublishComment { .. }
             | Self::KeepPost { .. }
-            | Self::ReleaseKeep { .. } => true,
+            | Self::ReleaseKeep { .. }
+            | Self::ExportBackup { .. } => true,
             Self::RecoverStartup
             | Self::RequestDiagnostics
             | Self::SyncContactProfile { .. }
@@ -185,6 +192,7 @@ impl NetworkCommand {
             Self::RespondFriendship { .. } => "answering the friendship request",
             Self::RemoveFriend { .. } => "unfriending",
             Self::ReconcileSpaces => "updating encryption membership",
+            Self::ExportBackup { .. } => "exporting the backup",
             Self::FollowBack { .. } => "completing the friendship",
             Self::SetHeart { .. } => "casting the heart",
             Self::PublishComment { .. } => "publishing the comment",
@@ -603,6 +611,7 @@ async fn default_handle_command(
             let mut sync = state.sync.lock().await;
             sync.reconcile_spaces().await
         }
+        NetworkCommand::ExportBackup { dest_path } => export_backup(&state, dest_path).await,
         NetworkCommand::FollowBack { profile_id } => follow_back(&state, profile_id).await,
         NetworkCommand::SetHeart {
             post_author_profile_id,
@@ -716,6 +725,36 @@ async fn unpin_and_prune_prefix(state: &RuntimeState, prefix: &str) {
     if let Err(err) = state.node.blobs.pins().delete_prefix(prefix).await {
         tracing::warn!("failed to unpin under {prefix}: {err}");
     }
+}
+
+/// Writes an encrypted snapshot of the identity-critical stores to
+/// `dest_path`. Blob bytes are not included yet (spec phase 2); media
+/// re-fetches from peers after a restore. Restore itself happens before the
+/// node starts, via `crate::backup::restore_backup`.
+async fn export_backup(state: &RuntimeState, dest_path: String) -> Result<()> {
+    let private_key = crate::profile::load_private_key_from_data_dir(&state.node.data_dir)?;
+    let staging = tempfile::tempdir().context("failed to create backup staging dir")?;
+    let mut files: Vec<(String, Vec<u8>)> = Vec::new();
+
+    let domain_snapshot = staging.path().join("domain.sqlite3");
+    {
+        let sync = state.sync.lock().await;
+        sync.snapshot_store_into(&domain_snapshot).await?;
+    }
+    files.push((
+        "domain.sqlite3".to_owned(),
+        std::fs::read(&domain_snapshot).context("failed to read domain snapshot")?,
+    ));
+
+    let profile_snapshot = staging.path().join("profile-store.sqlite3");
+    state.private_posts.snapshot_into(&profile_snapshot).await?;
+    files.push((
+        "profile-store.sqlite3".to_owned(),
+        std::fs::read(&profile_snapshot).context("failed to read profile-data snapshot")?,
+    ));
+
+    files.extend(crate::backup::collect_plain_files(&state.node.data_dir));
+    crate::backup::write_archive(&private_key, files, std::path::Path::new(&dest_path))
 }
 
 /// Finds the per-blob decryption secret for a blob hash by scanning every

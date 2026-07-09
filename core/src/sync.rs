@@ -252,6 +252,17 @@ impl JynSyncService {
         Ok(())
     }
 
+    /// Snapshots the domain store (operations, group-encryption state, key
+    /// secrets) into `dest` via `VACUUM INTO` — consistent while live.
+    pub(crate) async fn snapshot_store_into(&self, dest: &Path) -> Result<()> {
+        let dest = dest.to_string_lossy().replace('\'', "''");
+        sqlx::query(&format!("VACUUM INTO '{dest}'"))
+            .execute(self.store.pool())
+            .await
+            .context("failed to snapshot domain store")?;
+        Ok(())
+    }
+
     /// Pushes operations forged by the spaces manager (they are already
     /// persisted and syncable) into live gossip on the local topic.
     fn flush_spaces_outbox(&self) {
@@ -700,6 +711,73 @@ mod tests {
             .expect("state exists after restart");
         assert_eq!(state.posts.len(), 1);
         assert_eq!(state.posts[0].post_id, "post-1");
+
+        Ok(())
+    }
+
+    /// The spec's recovery promise: a backup archive plus the seed phrase
+    /// deterministically restores identity, opaque group-encryption state
+    /// and content — including the ability to read own encrypted posts.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn backup_restores_identity_and_encrypted_history() -> Result<()> {
+        let dir = tempdir()?;
+        let options = NodeOptions {
+            mdns_enabled: false,
+            relay_url: None,
+            ..Default::default()
+        };
+        let node = AppNode::with_data_dir(dir.path(), options.clone()).await?;
+        let profile = ProfileStore::load_or_create(dir.path())?;
+        let profile_id = profile.profile().profile_id.clone();
+        drop(profile);
+
+        let private_key = crate::profile::load_private_key_from_data_dir(dir.path())?;
+        let phrase = crate::backup::seed_phrase(&private_key)?;
+
+        let (event_tx, _event_rx) = flume::unbounded();
+        let archive = dir.path().join("jyn.backup");
+        {
+            let mut sync = JynSyncService::new(&node, profile_id.clone(), event_tx.clone()).await?;
+            sync.publish_encrypted(DomainOperation::PostPublished {
+                profile_id: profile_id.clone(),
+                post_id: "post-1".into(),
+                body: "sealed memories".into(),
+                media: Vec::new(),
+                visibility: Visibility::Friends,
+                expires_at: None,
+                created_at: 10,
+            })
+            .await?;
+
+            let snapshot = dir.path().join("domain-snapshot.sqlite3");
+            sync.snapshot_store_into(&snapshot).await?;
+            crate::backup::write_archive(
+                &private_key,
+                vec![("domain.sqlite3".to_owned(), std::fs::read(&snapshot)?)],
+                &archive,
+            )?;
+        }
+
+        // Restore into a brand-new data dir using only archive + phrase.
+        let restored_dir = tempdir()?;
+        crate::backup::restore_backup(restored_dir.path(), &archive, &phrase)?;
+
+        let restored_node = AppNode::with_data_dir(restored_dir.path(), options).await?;
+        let restored_profile = ProfileStore::load_or_create(restored_dir.path())?;
+        assert_eq!(
+            restored_profile.profile().profile_id,
+            profile_id,
+            "identity must survive restore"
+        );
+        drop(restored_profile);
+
+        let sync = JynSyncService::new(&restored_node, profile_id.clone(), event_tx).await?;
+        let state = sync
+            .read_profile_state(&profile_id)
+            .await?
+            .expect("state exists after restore");
+        assert_eq!(state.posts.len(), 1);
+        assert_eq!(state.posts[0].body, "sealed memories");
 
         Ok(())
     }

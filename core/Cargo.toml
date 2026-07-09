@@ -43,6 +43,9 @@ bytes = "1"
 directories = "5"
 tempfile = "3"
 
+# Backup (seed phrase for the identity key)
+bip39 = "2"
+
 # Media
 hound = "3.5"
 
