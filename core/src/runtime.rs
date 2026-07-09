@@ -383,6 +383,9 @@ fn apply_event(
         NetworkEvent::LocalStateUpdated { state } => {
             shared.river.apply_local_state(state);
             emit_friends(shared);
+            // Friends list may have changed; keep encryption membership in
+            // step. Idempotent, so over-triggering is harmless.
+            send_command(NetworkCommand::ReconcileSpaces);
         }
         NetworkEvent::PrivatePostsUpdated { posts } => {
             shared.river.apply_private_posts(posts);
@@ -408,6 +411,9 @@ fn apply_event(
             }
             shared.river.apply_contact_state(profile_id, state);
             emit_friends(shared);
+            // A contact update can carry their key bundle, unblocking their
+            // pending addition to the friends space.
+            send_command(NetworkCommand::ReconcileSpaces);
         }
         NetworkEvent::Error {
             context,
@@ -561,9 +567,13 @@ mod tests {
             );
         }
         let commands = sent.lock().unwrap();
+        let follow_backs: Vec<_> = commands
+            .iter()
+            .filter(|command| matches!(command, NetworkCommand::FollowBack { .. }))
+            .collect();
         assert_eq!(
-            commands.as_slice(),
-            &[NetworkCommand::FollowBack {
+            follow_backs.as_slice(),
+            &[&NetworkCommand::FollowBack {
                 profile_id: "anna".into()
             }]
         );

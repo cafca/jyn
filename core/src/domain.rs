@@ -79,6 +79,12 @@ pub struct MediaAttachment {
     /// Original file name, used by the external-open fallback card.
     #[serde(default)]
     pub file_name: Option<String>,
+    /// Per-blob AEAD key + nonce (32 + 12 bytes) when the blob replicates as
+    /// ciphertext. Only ever present inside encrypted post payloads, so the
+    /// key is protected by the group encryption around it. `None` = plaintext
+    /// blob (public posts).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blob_secret: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -89,6 +95,9 @@ pub enum DomainLogKind {
     Contacts,
     Interactions,
     Requests,
+    /// Group-encryption traffic: key bundles, membership control messages and
+    /// encrypted application payloads (see `crate::spaces`).
+    Spaces,
 }
 
 impl DomainLogKind {
@@ -99,6 +108,7 @@ impl DomainLogKind {
             Self::Contacts => 2,
             Self::Interactions => 3,
             Self::Requests => 4,
+            Self::Spaces => 5,
         }
     }
 }
@@ -124,6 +134,7 @@ impl DomainLogId {
             DomainLogKind::Contacts,
             DomainLogKind::Interactions,
             DomainLogKind::Requests,
+            DomainLogKind::Spaces,
         ]
         .into_iter()
         .map(|kind| Self::new(profile_id, kind))
@@ -235,6 +246,16 @@ pub enum DomainOperation {
         body: String,
         created_at: u64,
     },
+    /// Group-encryption traffic authored by this profile: an opaque
+    /// CBOR-encoded `SpacesArgs` (key bundle, membership control message or
+    /// encrypted application payload). Encrypted payloads decrypt back into a
+    /// regular [`DomainOperation`] which reduction picks up in place of this
+    /// wrapper; control messages and not-yet-decryptable payloads are skipped.
+    Spaces {
+        profile_id: String,
+        #[serde(with = "serde_bytes")]
+        args: Vec<u8>,
+    },
 }
 
 impl DomainOperation {
@@ -249,7 +270,8 @@ impl DomainOperation {
             | Self::PostLifetimeChanged { profile_id, .. }
             | Self::PostDeleted { profile_id, .. }
             | Self::HeartChanged { profile_id, .. }
-            | Self::CommentPublished { profile_id, .. } => profile_id,
+            | Self::CommentPublished { profile_id, .. }
+            | Self::Spaces { profile_id, .. } => profile_id,
             Self::FriendshipRequested {
                 target_profile_id, ..
             } => target_profile_id,
@@ -273,6 +295,7 @@ impl DomainOperation {
                 DomainLogKind::Interactions
             }
             Self::FriendshipRequested { .. } => DomainLogKind::Requests,
+            Self::Spaces { .. } => DomainLogKind::Spaces,
         }
     }
 }
@@ -717,6 +740,11 @@ impl JynOperationDomain {
                         },
                     );
                 }
+                DomainOperation::Spaces { .. } => {
+                    // Spaces wrappers are substituted by their decrypted inner
+                    // operation in `operations_for_profile`; one reaching
+                    // reduction is a control message or undecryptable payload.
+                }
             }
         }
 
@@ -822,8 +850,20 @@ impl JynOperationDomain {
                     let body = operation
                         .body
                         .context("domain operation payload is missing")?;
-                    let domain_operation = decode_cbor::<DomainOperation, _>(&body.to_bytes()[..])
-                        .context("failed to decode domain body")?;
+                    let mut domain_operation =
+                        decode_cbor::<DomainOperation, _>(&body.to_bytes()[..])
+                            .context("failed to decode domain body")?;
+                    if let DomainOperation::Spaces { .. } = &domain_operation {
+                        // Substitute the wrapper with its decrypted inner
+                        // operation; control messages and payloads we cannot
+                        // (yet) decrypt stay out of reduction entirely.
+                        match self.decrypted_inner_operation(&operation.hash).await? {
+                            Some(inner) if !matches!(inner, DomainOperation::Spaces { .. }) => {
+                                domain_operation = inner;
+                            }
+                            _ => continue,
+                        }
+                    }
                     operations.push(StoredDomainOperation {
                         author,
                         log_id: log_id.clone(),
@@ -836,6 +876,101 @@ impl JynOperationDomain {
 
         Ok(operations)
     }
+
+    /// All raw operations on a profile's topic, without decoding bodies or
+    /// substituting decrypted payloads. Used by the spaces service to find
+    /// unprocessed spaces messages after a restart.
+    pub async fn operations_for_profile_raw(
+        &self,
+        profile_id: &str,
+    ) -> Result<Vec<Operation<DomainExtensions>>> {
+        let topic = profile_sync_topic(profile_id);
+        let associations =
+            TopicStore::<Topic, VerifyingKey, DomainLogId>::resolve(&self.store, &topic)
+                .await
+                .map_err(|err| {
+                    anyhow::anyhow!("failed to resolve domain topic associations: {err}")
+                })?;
+
+        let mut operations = Vec::new();
+        for (author, log_ids) in associations {
+            for log_id in log_ids {
+                let entries = self
+                    .store
+                    .get_log_entries(&author, &log_id, None, None)
+                    .await
+                    .map_err(|err| anyhow::anyhow!("failed to load domain log: {err}"))?
+                    .unwrap_or_default();
+                operations.extend(entries.into_iter().map(|(operation, _)| operation));
+            }
+        }
+        Ok(operations)
+    }
+
+    /// The decrypted inner operation for a `DomainOperation::Spaces` wrapper,
+    /// stored by the spaces service once the payload could be decrypted.
+    pub async fn decrypted_inner_operation(
+        &self,
+        op_hash: &Hash,
+    ) -> Result<Option<DomainOperation>> {
+        let row: Option<(Vec<u8>,)> =
+            sqlx::query_as("SELECT inner_body FROM jyn_spaces_decrypted WHERE op_hash = ?")
+                .bind(op_hash.to_string())
+                .fetch_optional(self.store.pool())
+                .await
+                .context("failed to read decrypted spaces operation")?;
+        row.map(|(body,)| {
+            decode_cbor::<DomainOperation, _>(&body[..])
+                .context("failed to decode decrypted spaces operation")
+        })
+        .transpose()
+    }
+
+    pub async fn store_decrypted_inner_operation(
+        &self,
+        op_hash: &Hash,
+        inner: &DomainOperation,
+    ) -> Result<()> {
+        let body = encode_cbor(inner).context("failed to encode decrypted spaces operation")?;
+        sqlx::query(
+            "INSERT OR REPLACE INTO jyn_spaces_decrypted (op_hash, inner_body) VALUES (?, ?)",
+        )
+        .bind(op_hash.to_string())
+        .bind(body)
+        .execute(self.store.pool())
+        .await
+        .context("failed to store decrypted spaces operation")?;
+        Ok(())
+    }
+}
+
+/// Creates jyn's own bookkeeping tables for group encryption (decrypted
+/// payload cache, processed-message set, space ownership) next to the
+/// p2panda-store tables in the same database.
+pub async fn ensure_spaces_tables(store: &SqliteStore) -> Result<()> {
+    for ddl in [
+        "CREATE TABLE IF NOT EXISTS jyn_spaces_decrypted (
+            op_hash TEXT PRIMARY KEY,
+            inner_body BLOB NOT NULL
+        )",
+        "CREATE TABLE IF NOT EXISTS jyn_spaces_processed (
+            op_hash TEXT PRIMARY KEY
+        )",
+        "CREATE TABLE IF NOT EXISTS jyn_spaces_owner (
+            space_id TEXT PRIMARY KEY,
+            owner_profile_id TEXT NOT NULL
+        )",
+        "CREATE TABLE IF NOT EXISTS jyn_spaces_meta (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )",
+    ] {
+        sqlx::query(ddl)
+            .execute(store.pool())
+            .await
+            .context("failed to create jyn spaces table")?;
+    }
+    Ok(())
 }
 
 fn sort_for_reduction(operations: &mut [StoredDomainOperation]) {
@@ -1031,7 +1166,7 @@ mod tests {
         let mut expected = DomainLogId::all_for_profile(&profile_id);
         expected.sort();
         assert_eq!(resolved, expected);
-        assert_eq!(expected.len(), 5);
+        assert_eq!(expected.len(), 6);
 
         Ok(())
     }
@@ -1072,6 +1207,7 @@ mod tests {
                         width: None,
                         height: None,
                         file_name: None,
+                        blob_secret: None,
                     }]),
                     edited_at: 30,
                 },

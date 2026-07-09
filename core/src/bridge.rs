@@ -103,6 +103,9 @@ pub enum NetworkCommand {
     RemoveFriend {
         profile_id: String,
     },
+    /// Aligns friends-space membership (group encryption) with the current
+    /// friends list. Idempotent; dispatched after state updates.
+    ReconcileSpaces,
     /// Automatic reaction when someone we requested started following us:
     /// follow back, making the friendship mutual.
     FollowBack {
@@ -159,6 +162,7 @@ impl NetworkCommand {
             Self::RecoverStartup
             | Self::RequestDiagnostics
             | Self::SyncContactProfile { .. }
+            | Self::ReconcileSpaces
             | Self::FollowBack { .. }
             | Self::FetchMedia { .. }
             | Self::DrainExpired => false,
@@ -180,6 +184,7 @@ impl NetworkCommand {
             }
             Self::RespondFriendship { .. } => "answering the friendship request",
             Self::RemoveFriend { .. } => "unfriending",
+            Self::ReconcileSpaces => "updating encryption membership",
             Self::FollowBack { .. } => "completing the friendship",
             Self::SetHeart { .. } => "casting the heart",
             Self::PublishComment { .. } => "publishing the comment",
@@ -594,21 +599,24 @@ async fn default_handle_command(
             accept,
         } => respond_friendship(&state, requester_profile_id, accept).await,
         NetworkCommand::RemoveFriend { profile_id } => remove_friend(&state, profile_id).await,
+        NetworkCommand::ReconcileSpaces => {
+            let mut sync = state.sync.lock().await;
+            sync.reconcile_spaces().await
+        }
         NetworkCommand::FollowBack { profile_id } => follow_back(&state, profile_id).await,
         NetworkCommand::SetHeart {
             post_author_profile_id,
             post_id,
             active,
         } => {
-            let mut sync = state.sync.lock().await;
-            sync.publish(DomainOperation::HeartChanged {
+            let operation = DomainOperation::HeartChanged {
                 profile_id: state.local_profile_id.clone(),
-                post_author_profile_id,
-                post_id,
+                post_author_profile_id: post_author_profile_id.clone(),
+                post_id: post_id.clone(),
                 active,
                 recorded_at: now_unix_secs(),
-            })
-            .await
+            };
+            publish_interaction(&state, &post_author_profile_id, &post_id, operation).await
         }
         NetworkCommand::PublishComment {
             post_author_profile_id,
@@ -618,16 +626,15 @@ async fn default_handle_command(
             anyhow::ensure!(!body.trim().is_empty(), "a comment needs some words");
             let now = now_unix_secs();
             let comment_id = new_post_id(&state.local_profile_id, now);
-            let mut sync = state.sync.lock().await;
-            sync.publish(DomainOperation::CommentPublished {
+            let operation = DomainOperation::CommentPublished {
                 profile_id: state.local_profile_id.clone(),
                 comment_id,
-                post_author_profile_id,
-                post_id,
+                post_author_profile_id: post_author_profile_id.clone(),
+                post_id: post_id.clone(),
                 body: body.trim().to_owned(),
                 created_at: now,
-            })
-            .await
+            };
+            publish_interaction(&state, &post_author_profile_id, &post_id, operation).await
         }
         NetworkCommand::KeepPost {
             post_author_profile_id,
@@ -648,6 +655,45 @@ async fn default_handle_command(
         }
         NetworkCommand::FetchMedia { blob_hash } => fetch_media(&state, &event_tx, blob_hash).await,
         NetworkCommand::DrainExpired => drain_expired(&state, &event_tx).await,
+    }
+}
+
+/// The visibility of a post as its author currently replicates it, from the
+/// author's reduced state (local or contact). `None` = post unknown here.
+async fn post_visibility(
+    state: &RuntimeState,
+    author_profile_id: &str,
+    post_id: &str,
+) -> Result<Option<Visibility>> {
+    let sync = state.sync.lock().await;
+    let author_state = sync.read_profile_state(author_profile_id).await?;
+    Ok(author_state.and_then(|reduced| {
+        reduced
+            .posts
+            .iter()
+            .find(|post| post.post_id == post_id)
+            .map(|post| post.visibility)
+    }))
+}
+
+/// Routes a heart/comment either to plaintext sync (public target post) or
+/// into the post author's encryption space (non-public target post), so the
+/// interaction is visible to exactly the audience that can see the post.
+async fn publish_interaction(
+    state: &RuntimeState,
+    post_author_profile_id: &str,
+    post_id: &str,
+    operation: DomainOperation,
+) -> Result<()> {
+    let visibility = post_visibility(state, post_author_profile_id, post_id)
+        .await?
+        .with_context(|| format!("unknown post {post_id}; cannot react to it"))?;
+    let mut sync = state.sync.lock().await;
+    if visibility == Visibility::Public {
+        sync.publish(operation).await
+    } else {
+        sync.publish_encrypted_to_owner(post_author_profile_id, operation)
+            .await
     }
 }
 
@@ -877,6 +923,9 @@ async fn respond_friendship(
         })
         .await?;
         sync.sync_contact_profile(&requester_profile_id).await?;
+        // Add the new friend to the encryption space as soon as their key
+        // bundle allows; retried on later state updates if it hasn't arrived.
+        let _ = sync.reconcile_spaces().await;
     }
     Ok(())
 }
@@ -892,6 +941,9 @@ async fn remove_friend(state: &RuntimeState, profile_id: String) -> Result<()> {
     .await?;
     sync.stop_contact_sync(&profile_id);
     state.outgoing_requests.remove(&profile_id)?;
+    // Removing them from the friends space re-keys it, so they cannot read
+    // anything published from here on.
+    sync.reconcile_spaces().await?;
     Ok(())
 }
 
@@ -906,6 +958,7 @@ async fn follow_back(state: &RuntimeState, profile_id: String) -> Result<()> {
     .await?;
     sync.sync_contact_profile(&profile_id).await?;
     state.outgoing_requests.remove(&profile_id)?;
+    let _ = sync.reconcile_spaces().await;
     Ok(())
 }
 
@@ -997,8 +1050,7 @@ async fn publish_post(
         return Ok(());
     }
 
-    let mut sync = state.sync.lock().await;
-    sync.publish(DomainOperation::PostPublished {
+    let operation = DomainOperation::PostPublished {
         profile_id: state.local_profile_id.clone(),
         post_id,
         body: draft.body,
@@ -1006,8 +1058,15 @@ async fn publish_post(
         visibility: draft.visibility,
         expires_at,
         created_at: now,
-    })
-    .await
+    };
+    let mut sync = state.sync.lock().await;
+    if draft.visibility == Visibility::Public {
+        sync.publish(operation).await
+    } else {
+        // Friends and (until they exist separately) Circles posts encrypt to
+        // the friends space; only members can read them.
+        sync.publish_encrypted(operation).await
+    }
 }
 
 /// Imports staged files into the blob store, pins them under the post, and
@@ -1084,6 +1143,7 @@ async fn import_attachments(
                 .path
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned()),
+            blob_secret: None,
         });
     }
     Ok(attachments)
@@ -1114,15 +1174,22 @@ async fn edit_post(
         return Ok(());
     }
 
-    let mut sync = state.sync.lock().await;
-    sync.publish(DomainOperation::PostEdited {
+    let visibility = post_visibility(state, &state.local_profile_id, &post_id)
+        .await?
+        .unwrap_or(Visibility::Public);
+    let operation = DomainOperation::PostEdited {
         profile_id: state.local_profile_id.clone(),
         post_id,
         body,
         media: Some(media),
         edited_at: now_unix_secs(),
-    })
-    .await
+    };
+    let mut sync = state.sync.lock().await;
+    if visibility == Visibility::Public {
+        sync.publish(operation).await
+    } else {
+        sync.publish_encrypted(operation).await
+    }
 }
 
 async fn delete_post(
@@ -1140,13 +1207,20 @@ async fn delete_post(
         return Ok(());
     }
 
-    let mut sync = state.sync.lock().await;
-    sync.publish(DomainOperation::PostDeleted {
+    let visibility = post_visibility(state, &state.local_profile_id, &post_id)
+        .await?
+        .unwrap_or(Visibility::Public);
+    let operation = DomainOperation::PostDeleted {
         profile_id: state.local_profile_id.clone(),
         post_id: post_id.clone(),
         deleted_at: now_unix_secs(),
-    })
-    .await?;
+    };
+    let mut sync = state.sync.lock().await;
+    if visibility == Visibility::Public {
+        sync.publish(operation).await?;
+    } else {
+        sync.publish_encrypted(operation).await?;
+    }
     drop(sync);
     unpin_and_prune_prefix(state, &format!("feed/{post_id}/")).await;
     Ok(())
@@ -1167,14 +1241,21 @@ async fn set_post_lifetime(
         return Ok(());
     }
 
-    let mut sync = state.sync.lock().await;
-    sync.publish(DomainOperation::PostLifetimeChanged {
+    let visibility = post_visibility(state, &state.local_profile_id, &post_id)
+        .await?
+        .unwrap_or(Visibility::Public);
+    let operation = DomainOperation::PostLifetimeChanged {
         profile_id: state.local_profile_id.clone(),
         post_id,
         expires_at,
         changed_at: now_unix_secs(),
-    })
-    .await
+    };
+    let mut sync = state.sync.lock().await;
+    if visibility == Visibility::Public {
+        sync.publish(operation).await
+    } else {
+        sync.publish_encrypted(operation).await
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

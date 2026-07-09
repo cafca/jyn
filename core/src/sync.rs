@@ -30,10 +30,11 @@ use p2panda_sync::protocols::TopicLogSyncEvent;
 use crate::bridge::NetworkEvent;
 use crate::domain::{
     DomainExtensions, DomainLogId, DomainOperation, JynOperationDomain, JynTopicMap,
-    ReducedProfileState,
+    ReducedProfileState, Visibility,
 };
 use crate::node::AppNode;
 use crate::profile::load_private_key_from_data_dir;
+use crate::spaces::JynSpaces;
 
 const DOMAIN_DB_FILE: &str = "domain.sqlite3";
 const CONTACT_BOOTSTRAP_SETTLE_MILLIS: u64 = 750;
@@ -58,7 +59,7 @@ pub(crate) struct JynSyncService {
     topic_map: JynTopicMap,
     domain: JynOperationDomain,
     log_sync: DomainSync,
-    local_handle: DomainSyncHandle,
+    local_handle: std::sync::Arc<DomainSyncHandle>,
     local_topic: Topic,
     address_book: p2panda_net::AddressBook,
     relay_url: Option<RelayUrl>,
@@ -66,6 +67,7 @@ pub(crate) struct JynSyncService {
     local_private_key: SigningKey,
     contact_streams: HashMap<String, ContactSync>,
     event_tx: Sender<NetworkEvent>,
+    spaces: JynSpaces,
     _local_task: tokio::task::JoinHandle<()>,
 }
 
@@ -89,14 +91,28 @@ impl JynSyncService {
             .await
             .context("failed to register local profile sync topic")?;
 
+        let spaces = JynSpaces::new(
+            store.clone(),
+            local_private_key.clone(),
+            local_profile_id.clone(),
+        )
+        .await
+        .context("failed to initialize group encryption")?;
+        spaces
+            .ensure_ready()
+            .await
+            .context("failed to prepare group encryption")?;
+
         let log_sync = LogSync::builder(store.clone(), node.endpoint.clone(), node.gossip.clone())
             .spawn()
             .await
             .context("failed to spawn LogSync for jyn sync")?;
-        let local_handle = log_sync
-            .stream(topic, true)
-            .await
-            .context("failed to join local profile sync topic")?;
+        let local_handle = std::sync::Arc::new(
+            log_sync
+                .stream(topic, true)
+                .await
+                .context("failed to join local profile sync topic")?,
+        );
         let local_subscription = local_handle
             .subscribe()
             .await
@@ -107,6 +123,9 @@ impl JynSyncService {
             local_profile_id.clone(),
             event_tx.clone(),
             true,
+            spaces.clone(),
+            local_profile_id.clone(),
+            local_handle.clone(),
         );
 
         let service = Self {
@@ -122,8 +141,16 @@ impl JynSyncService {
             local_private_key,
             contact_streams: HashMap::new(),
             event_tx,
+            spaces,
             _local_task: local_task,
         };
+        // Flush any startup-forged spaces messages (key bundle, space
+        // creation) into live sync and pick up unprocessed backlog.
+        let _ = service
+            .spaces
+            .process_backlog(&[service.local_profile_id.clone()])
+            .await;
+        service.flush_spaces_outbox();
         let _ = service.sync_local_profile_peers().await;
         Ok(service)
     }
@@ -136,7 +163,16 @@ impl JynSyncService {
     /// Appends an operation to the local store and publishes it into live
     /// sync on its topic (the local topic, or a synced contact's topic for
     /// operations targeting foreign profiles, e.g. friendship requests).
+    ///
+    /// This is the plaintext path: non-public posts must go through
+    /// [`Self::publish_encrypted`] instead, which this guards structurally.
     pub(crate) async fn publish(&mut self, operation: DomainOperation) -> Result<()> {
+        if let DomainOperation::PostPublished { visibility, .. } = &operation {
+            anyhow::ensure!(
+                *visibility == Visibility::Public,
+                "non-public posts must be encrypted; use publish_encrypted"
+            );
+        }
         let body =
             Body::from(encode_cbor(&operation).context("failed to encode domain operation body")?);
         let header = self
@@ -176,6 +212,54 @@ impl JynSyncService {
         profile_id: &str,
     ) -> Result<Option<ReducedProfileState>> {
         self.domain.read_profile_state(profile_id).await
+    }
+
+    /// Encrypts a domain operation to our own friends space and pushes the
+    /// resulting wrapper operations into live sync.
+    pub(crate) async fn publish_encrypted(&mut self, operation: DomainOperation) -> Result<()> {
+        self.spaces.encrypt_local(&operation).await?;
+        self.flush_spaces_outbox();
+        self.emit_local_state().await;
+        Ok(())
+    }
+
+    /// Encrypts a domain operation (comment/heart) to the friends space of
+    /// the given profile. Fails if we have not been welcomed there yet.
+    pub(crate) async fn publish_encrypted_to_owner(
+        &mut self,
+        owner_profile_id: &str,
+        operation: DomainOperation,
+    ) -> Result<()> {
+        self.spaces
+            .encrypt_to_owner(owner_profile_id, &operation)
+            .await?;
+        self.flush_spaces_outbox();
+        self.emit_local_state().await;
+        Ok(())
+    }
+
+    /// Aligns friends-space membership with the current accepted-friends
+    /// list, then pushes any forged control messages into live sync.
+    /// Idempotent and cheap when nothing changed.
+    pub(crate) async fn reconcile_spaces(&mut self) -> Result<()> {
+        let friends = self
+            .read_profile_state(&self.local_profile_id)
+            .await?
+            .map(|state| state.followed_profile_ids)
+            .unwrap_or_default();
+        self.spaces.reconcile_friends(&friends).await?;
+        self.flush_spaces_outbox();
+        Ok(())
+    }
+
+    /// Pushes operations forged by the spaces manager (they are already
+    /// persisted and syncable) into live gossip on the local topic.
+    fn flush_spaces_outbox(&self) {
+        for operation in self.spaces.drain_outbox() {
+            if let Err(err) = self.local_handle.publish(operation) {
+                tracing::warn!("failed to publish spaces operation to live sync: {err}");
+            }
+        }
     }
 
     async fn emit_local_state(&self) {
@@ -263,6 +347,9 @@ impl JynSyncService {
                 profile_id.to_owned(),
                 self.event_tx.clone(),
                 false,
+                self.spaces.clone(),
+                self.local_profile_id.clone(),
+                self.local_handle.clone(),
             );
             self.contact_streams
                 .insert(profile_id.to_owned(), ContactSync { handle, task });
@@ -360,15 +447,55 @@ async fn open_domain_store(data_dir: &Path) -> Result<DomainStore> {
 
 /// Ingests operations arriving on a topic and reflects the topic profile's
 /// new reduced state to the UI as events.
+#[allow(clippy::too_many_arguments)]
 fn spawn_topic_task(
     mut subscription: DomainSyncSubscription,
     store: DomainStore,
     profile_id: String,
     event_tx: Sender<NetworkEvent>,
     is_local: bool,
+    spaces: JynSpaces,
+    local_profile_id: String,
+    local_handle: std::sync::Arc<DomainSyncHandle>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut domain = JynOperationDomain::new(store);
+
+        // Applies a spaces processing report: re-emits profiles whose reduced
+        // state gained decrypted payloads and, when new key bundles arrived,
+        // reconciles friends-space membership (a friend can only be added
+        // once their bundle is known) and pushes forged control messages
+        // into live sync.
+        async fn apply_spaces_report(
+            report: crate::spaces::IngestReport,
+            domain: &JynOperationDomain,
+            spaces: &JynSpaces,
+            profile_id: &str,
+            local_profile_id: &str,
+            event_tx: &Sender<NetworkEvent>,
+            local_handle: &DomainSyncHandle,
+        ) {
+            for changed in &report.changed_profiles {
+                if changed != profile_id {
+                    let is_local = changed == local_profile_id;
+                    emit_topic_state(domain, changed, event_tx, is_local).await;
+                }
+            }
+            if !report.new_key_bundles.is_empty() {
+                let friends = match domain.read_profile_state(local_profile_id).await {
+                    Ok(Some(state)) => state.followed_profile_ids,
+                    _ => Vec::new(),
+                };
+                if let Err(err) = spaces.reconcile_friends(&friends).await {
+                    tracing::warn!("spaces reconcile failed: {err:#}");
+                }
+                for operation in spaces.drain_outbox() {
+                    if let Err(err) = local_handle.publish(operation) {
+                        tracing::warn!("failed to publish spaces operation: {err}");
+                    }
+                }
+            }
+        }
 
         while let Some(message) = subscription.next().await {
             let Ok(message) = message else {
@@ -377,18 +504,64 @@ fn spawn_topic_task(
 
             match message.event {
                 TopicLogSyncEvent::OperationReceived { operation, .. } => {
-                    if let Err(err) = domain.ingest_remote_operation(*operation).await {
+                    let operation = *operation;
+                    if let Err(err) = domain.ingest_remote_operation(operation.clone()).await {
                         tracing::warn!(
                             topic_profile_id = %profile_id,
                             "failed to ingest synced operation: {err:#}"
                         );
                         continue;
                     }
+                    // Spaces messages additionally run through the group
+                    // encryption manager; decrypted payloads become visible
+                    // to reduction, so re-emit affected profiles.
+                    match spaces.ingest(&operation).await {
+                        Ok(report) => {
+                            apply_spaces_report(
+                                report,
+                                &domain,
+                                &spaces,
+                                &profile_id,
+                                &local_profile_id,
+                                &event_tx,
+                                &local_handle,
+                            )
+                            .await;
+                        }
+                        Err(err) => {
+                            tracing::warn!(
+                                topic_profile_id = %profile_id,
+                                "spaces processing failed: {err:#}"
+                            );
+                        }
+                    }
                     emit_topic_state(&domain, &profile_id, &event_tx, is_local).await;
                 }
                 TopicLogSyncEvent::SyncFinished { .. }
                 | TopicLogSyncEvent::LiveModeStarted
                 | TopicLogSyncEvent::SessionFinished { .. } => {
+                    // Sync sessions can deliver dependencies out of order
+                    // across authors; retry parked spaces messages now.
+                    match spaces.drain_pending().await {
+                        Ok(report) => {
+                            apply_spaces_report(
+                                report,
+                                &domain,
+                                &spaces,
+                                &profile_id,
+                                &local_profile_id,
+                                &event_tx,
+                                &local_handle,
+                            )
+                            .await;
+                        }
+                        Err(err) => {
+                            tracing::warn!(
+                                topic_profile_id = %profile_id,
+                                "spaces drain failed: {err:#}"
+                            );
+                        }
+                    }
                     emit_topic_state(&domain, &profile_id, &event_tx, is_local).await;
                 }
                 TopicLogSyncEvent::Failed { error } => {
@@ -493,7 +666,10 @@ mod tests {
         let (event_tx, event_rx) = flume::unbounded();
         {
             let mut sync = JynSyncService::new(&node, profile_id.clone(), event_tx.clone()).await?;
-            sync.publish(DomainOperation::PostPublished {
+            // A friends post goes through the encrypted path; the reduced
+            // state below only sees it if encrypt → decrypt-substitution →
+            // reduction all work.
+            sync.publish_encrypted(DomainOperation::PostPublished {
                 profile_id: profile_id.clone(),
                 post_id: "post-1".into(),
                 body: "hello river".into(),

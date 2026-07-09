@@ -1410,6 +1410,7 @@ impl SseDecode for crate::domain::MediaAttachment {
             width: var_width,
             height: var_height,
             file_name: var_fileName,
+            blob_secret: None,
         };
     }
 }
