@@ -133,6 +133,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   MediaAttachment dco_decode_media_attachment(dynamic raw);
 
   @protected
+  MediaBackupMode dco_decode_media_backup_mode(dynamic raw);
+
+  @protected
   MediaDraftInput dco_decode_media_draft_input(dynamic raw);
 
   @protected
@@ -330,6 +333,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   MediaAttachment sse_decode_media_attachment(SseDeserializer deserializer);
+
+  @protected
+  MediaBackupMode sse_decode_media_backup_mode(SseDeserializer deserializer);
 
   @protected
   MediaDraftInput sse_decode_media_draft_input(SseDeserializer deserializer);
@@ -573,6 +579,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_media_attachment(
     MediaAttachment self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_media_backup_mode(
+    MediaBackupMode self,
     SseSerializer serializer,
   );
 

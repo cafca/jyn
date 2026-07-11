@@ -4,7 +4,7 @@
 use anyhow::Result;
 
 use crate::runtime::AppRuntime;
-use crate::settings::RelayMode;
+use crate::settings::{MediaBackupMode, RelayMode};
 
 #[derive(Debug, Clone)]
 pub struct SettingsView {
@@ -12,6 +12,7 @@ pub struct SettingsView {
     pub relay_mode: RelayMode,
     pub custom_relay_url: Option<String>,
     pub default_download_dir: Option<String>,
+    pub media_backup_mode: MediaBackupMode,
 }
 
 pub fn get_settings() -> Result<SettingsView> {
@@ -23,7 +24,13 @@ pub fn get_settings() -> Result<SettingsView> {
         default_download_dir: settings
             .default_download_dir
             .map(|dir| dir.to_string_lossy().into_owned()),
+        media_backup_mode: settings.media_backup_mode,
     })
+}
+
+/// Returns whether the value changed. Applies to the next backup export.
+pub fn set_media_backup_mode(mode: MediaBackupMode) -> Result<bool> {
+    AppRuntime::get()?.with_settings_store(|store| store.set_media_backup_mode(mode))
 }
 
 /// Returns whether the value changed. Takes effect on next node start.

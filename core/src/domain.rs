@@ -960,7 +960,8 @@ pub async fn ensure_spaces_tables(store: &SqliteStore) -> Result<()> {
         )",
         "CREATE TABLE IF NOT EXISTS jyn_spaces_owner (
             space_id TEXT PRIMARY KEY,
-            owner_profile_id TEXT NOT NULL
+            owner_profile_id TEXT NOT NULL,
+            kind TEXT
         )",
         "CREATE TABLE IF NOT EXISTS jyn_spaces_meta (
             key TEXT PRIMARY KEY,
@@ -971,6 +972,21 @@ pub async fn ensure_spaces_tables(store: &SqliteStore) -> Result<()> {
             .execute(store.pool())
             .await
             .context("failed to create jyn spaces table")?;
+    }
+
+    // Additive migration for stores created before circles existed. If the
+    // column is new, every existing row is a friends space (the only kind
+    // back then) — backfill exactly once; later rows start as NULL until a
+    // decrypted post settles their kind.
+    if sqlx::query("ALTER TABLE jyn_spaces_owner ADD COLUMN kind TEXT")
+        .execute(store.pool())
+        .await
+        .is_ok()
+    {
+        sqlx::query("UPDATE jyn_spaces_owner SET kind = 'friends' WHERE kind IS NULL")
+            .execute(store.pool())
+            .await
+            .context("failed to backfill space kinds")?;
     }
     Ok(())
 }

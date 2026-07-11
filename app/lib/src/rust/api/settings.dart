@@ -12,6 +12,10 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 Future<SettingsView> getSettings() =>
     RustLib.instance.api.crateApiSettingsGetSettings();
 
+/// Returns whether the value changed. Applies to the next backup export.
+Future<bool> setMediaBackupMode({required MediaBackupMode mode}) =>
+    RustLib.instance.api.crateApiSettingsSetMediaBackupMode(mode: mode);
+
 /// Returns whether the value changed. Takes effect on next node start.
 Future<bool> setMdnsEnabled({required bool enabled}) =>
     RustLib.instance.api.crateApiSettingsSetMdnsEnabled(enabled: enabled);
@@ -30,12 +34,14 @@ class SettingsView {
   final RelayMode relayMode;
   final String? customRelayUrl;
   final String? defaultDownloadDir;
+  final MediaBackupMode mediaBackupMode;
 
   const SettingsView({
     required this.mdnsEnabled,
     required this.relayMode,
     this.customRelayUrl,
     this.defaultDownloadDir,
+    required this.mediaBackupMode,
   });
 
   @override
@@ -43,7 +49,8 @@ class SettingsView {
       mdnsEnabled.hashCode ^
       relayMode.hashCode ^
       customRelayUrl.hashCode ^
-      defaultDownloadDir.hashCode;
+      defaultDownloadDir.hashCode ^
+      mediaBackupMode.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -53,5 +60,6 @@ class SettingsView {
           mdnsEnabled == other.mdnsEnabled &&
           relayMode == other.relayMode &&
           customRelayUrl == other.customRelayUrl &&
-          defaultDownloadDir == other.defaultDownloadDir;
+          defaultDownloadDir == other.defaultDownloadDir &&
+          mediaBackupMode == other.mediaBackupMode;
 }

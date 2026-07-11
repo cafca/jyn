@@ -372,4 +372,15 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn store_stays_usable_after_vacuum_snapshot() -> Result<()> {
+        let dir = tempdir()?;
+        let store = PrivatePostsStore::open(dir.path())?;
+        store
+            .snapshot_into(&dir.path().join("snap.sqlite3"))
+            .await?;
+        assert!(store.list()?.is_empty());
+        Ok(())
+    }
 }

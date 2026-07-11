@@ -38,7 +38,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.12.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1121507118;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -79869872;
 
 // Section: executor
 
@@ -957,6 +957,41 @@ fn wire__crate__api__settings__set_mdns_enabled_impl(
         },
     )
 }
+fn wire__crate__api__settings__set_media_backup_mode_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "set_media_backup_mode",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_mode = <crate::settings::MediaBackupMode>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
+                    (move || {
+                        let output_ok = crate::api::settings::set_media_backup_mode(api_mode)?;
+                        Ok(output_ok)
+                    })(),
+                )
+            }
+        },
+    )
+}
 fn wire__crate__api__commands__set_post_lifetime_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -1559,6 +1594,19 @@ impl SseDecode for crate::domain::MediaAttachment {
     }
 }
 
+impl SseDecode for crate::settings::MediaBackupMode {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut inner = <i32>::sse_decode(deserializer);
+        return match inner {
+            0 => crate::settings::MediaBackupMode::Full,
+            1 => crate::settings::MediaBackupMode::KeptOnly,
+            2 => crate::settings::MediaBackupMode::MetadataOnly,
+            _ => unreachable!("Invalid variant for MediaBackupMode: {}", inner),
+        };
+    }
+}
+
 impl SseDecode for crate::api::commands::MediaDraftInput {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -1803,11 +1851,13 @@ impl SseDecode for crate::api::settings::SettingsView {
         let mut var_relayMode = <crate::settings::RelayMode>::sse_decode(deserializer);
         let mut var_customRelayUrl = <Option<String>>::sse_decode(deserializer);
         let mut var_defaultDownloadDir = <Option<String>>::sse_decode(deserializer);
+        let mut var_mediaBackupMode = <crate::settings::MediaBackupMode>::sse_decode(deserializer);
         return crate::api::settings::SettingsView {
             mdns_enabled: var_mdnsEnabled,
             relay_mode: var_relayMode,
             custom_relay_url: var_customRelayUrl,
             default_download_dir: var_defaultDownloadDir,
+            media_backup_mode: var_mediaBackupMode,
         };
     }
 }
@@ -1939,11 +1989,17 @@ fn pde_ffi_dispatcher_primary_impl(
         22 => wire__crate__api__lifecycle__set_app_focused_impl(port, ptr, rust_vec_len, data_len),
         23 => wire__crate__api__commands__set_heart_impl(port, ptr, rust_vec_len, data_len),
         24 => wire__crate__api__settings__set_mdns_enabled_impl(port, ptr, rust_vec_len, data_len),
-        25 => wire__crate__api__commands__set_post_lifetime_impl(port, ptr, rust_vec_len, data_len),
-        26 => wire__crate__api__settings__set_relay_config_impl(port, ptr, rust_vec_len, data_len),
-        27 => wire__crate__api__lifecycle__start_node_impl(port, ptr, rust_vec_len, data_len),
-        28 => wire__crate__api__commands__update_profile_impl(port, ptr, rust_vec_len, data_len),
-        29 => wire__crate__api__media__voice_note_summary_impl(port, ptr, rust_vec_len, data_len),
+        25 => wire__crate__api__settings__set_media_backup_mode_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        26 => wire__crate__api__commands__set_post_lifetime_impl(port, ptr, rust_vec_len, data_len),
+        27 => wire__crate__api__settings__set_relay_config_impl(port, ptr, rust_vec_len, data_len),
+        28 => wire__crate__api__lifecycle__start_node_impl(port, ptr, rust_vec_len, data_len),
+        29 => wire__crate__api__commands__update_profile_impl(port, ptr, rust_vec_len, data_len),
+        30 => wire__crate__api__media__voice_note_summary_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -2169,6 +2225,28 @@ impl flutter_rust_bridge::IntoIntoDart<crate::domain::MediaAttachment>
     for crate::domain::MediaAttachment
 {
     fn into_into_dart(self) -> crate::domain::MediaAttachment {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::settings::MediaBackupMode {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        match self {
+            Self::Full => 0.into_dart(),
+            Self::KeptOnly => 1.into_dart(),
+            Self::MetadataOnly => 2.into_dart(),
+            _ => unreachable!(),
+        }
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::settings::MediaBackupMode
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::settings::MediaBackupMode>
+    for crate::settings::MediaBackupMode
+{
+    fn into_into_dart(self) -> crate::settings::MediaBackupMode {
         self
     }
 }
@@ -2429,6 +2507,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::settings::SettingsView {
             self.relay_mode.into_into_dart().into_dart(),
             self.custom_relay_url.into_into_dart().into_dart(),
             self.default_download_dir.into_into_dart().into_dart(),
+            self.media_backup_mode.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -2803,6 +2882,23 @@ impl SseEncode for crate::domain::MediaAttachment {
     }
 }
 
+impl SseEncode for crate::settings::MediaBackupMode {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(
+            match self {
+                crate::settings::MediaBackupMode::Full => 0,
+                crate::settings::MediaBackupMode::KeptOnly => 1,
+                crate::settings::MediaBackupMode::MetadataOnly => 2,
+                _ => {
+                    unimplemented!("");
+                }
+            },
+            serializer,
+        );
+    }
+}
+
 impl SseEncode for crate::api::commands::MediaDraftInput {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -3005,6 +3101,7 @@ impl SseEncode for crate::api::settings::SettingsView {
         <crate::settings::RelayMode>::sse_encode(self.relay_mode, serializer);
         <Option<String>>::sse_encode(self.custom_relay_url, serializer);
         <Option<String>>::sse_encode(self.default_download_dir, serializer);
+        <crate::settings::MediaBackupMode>::sse_encode(self.media_backup_mode, serializer);
     }
 }
 

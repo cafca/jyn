@@ -12,8 +12,14 @@
 //! encrypted to a key derived from the identity seed, so possession of the
 //! archive alone reveals nothing; restore needs archive + seed phrase.
 //!
-//! Blob bytes are not yet included (spec phase 2); after a restore, media
-//! re-fetches from peers that still hold it.
+//! Blob bytes ride along as `blobs/<hash>` entries, scoped by the media
+//! backup mode setting (never for expired posts — backing those up would
+//! undo their ephemerality). The bytes are the stored form: ciphertext for
+//! non-public posts' media, plaintext for public — either way sealed inside
+//! the encrypted archive. Restore stages them into `restored-blobs/`; the
+//! first node start re-imports and re-pins them (see
+//! `crate::bridge::import_restored_blobs`) because the blob store needs a
+//! running node.
 
 use std::fs;
 use std::path::Path;
@@ -30,6 +36,13 @@ use crate::data_schema::DATA_SCHEMA_VERSION;
 const MAGIC: &[u8; 8] = b"JYNBAK01";
 const NODE_KEY_FILE: &str = "node.key";
 const SCHEMA_VERSION_FILE: &str = "schema.version";
+
+/// Archive-entry prefix for blob bytes; the rest of the name is the blob
+/// hash (the content address the restored posts reference).
+pub const BLOB_ENTRY_PREFIX: &str = "blobs/";
+/// Staging directory (relative to the data dir) where restore parks blob
+/// bytes until the first node start imports them into the blob store.
+pub const RESTORED_BLOBS_DIR: &str = "restored-blobs";
 
 /// Files snapshotted into the archive, relative to the data dir. Sqlite
 /// stores are snapshotted via `VACUUM INTO` (consistent while live), the
@@ -166,6 +179,17 @@ pub fn restore_backup(data_dir: &Path, archive: &Path, phrase: &str) -> Result<(
     fs::write(data_dir.join(NODE_KEY_FILE), private_key.as_bytes())
         .context("failed to write restored identity key")?;
     for (name, bytes) in &payload.files {
+        if let Some(hash) = name.strip_prefix(BLOB_ENTRY_PREFIX) {
+            anyhow::ensure!(
+                !hash.is_empty() && hash.chars().all(|c| c.is_ascii_alphanumeric()),
+                "backup carries an invalid blob entry name {name}"
+            );
+            let staging = data_dir.join(RESTORED_BLOBS_DIR);
+            fs::create_dir_all(&staging).context("failed to create blob staging directory")?;
+            fs::write(staging.join(hash), bytes)
+                .with_context(|| format!("failed to stage restored blob {hash}"))?;
+            continue;
+        }
         fs::write(data_dir.join(name), bytes)
             .with_context(|| format!("failed to restore {name}"))?;
     }
