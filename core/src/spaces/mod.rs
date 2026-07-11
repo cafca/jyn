@@ -306,10 +306,12 @@ impl JynSpaces {
                 continue;
             };
             match space.add(actor, Access::write()).await {
-                Ok((groups_y, space_y, auth_msg, space_msg)) => {
+                Ok((groups_y, space_y, auth_msg, space_msgs)) => {
                     self.persist_states(Some(&groups_y), Some(space_y)).await?;
                     self.mark_processed(&auth_msg.id).await?;
-                    self.mark_processed(&space_msg.id).await?;
+                    for space_msg in &space_msgs {
+                        self.mark_processed(&space_msg.id).await?;
+                    }
                     debug!(member_id, "added member to own space");
                 }
                 Err(err) => {
