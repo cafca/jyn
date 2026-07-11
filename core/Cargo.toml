@@ -18,9 +18,12 @@ unexpected_cfgs = { level = "warn", check-cfg = ["cfg(frb_expand)"] }
 p2panda-blobs = { git = "https://github.com/cafca/p2panda.git", branch = "port-blobs-to-net-v0.5", features = ["fs-store"] }
 p2panda-core = { git = "https://github.com/cafca/p2panda.git", branch = "port-blobs-to-net-v0.5" }
 p2panda-net = { git = "https://github.com/cafca/p2panda.git", branch = "port-blobs-to-net-v0.5", features = ["supervisor"] }
-p2panda-store = { git = "https://github.com/cafca/p2panda.git", branch = "port-blobs-to-net-v0.5", features = ["sqlite"] }
+p2panda-store = { git = "https://github.com/cafca/p2panda.git", branch = "port-blobs-to-net-v0.5", features = ["sqlite", "spaces"] }
 p2panda-stream = { git = "https://github.com/cafca/p2panda.git", branch = "port-blobs-to-net-v0.5" }
 p2panda-sync = { git = "https://github.com/cafca/p2panda.git", branch = "port-blobs-to-net-v0.5" }
+p2panda-spaces = { git = "https://github.com/cafca/p2panda.git", branch = "port-blobs-to-net-v0.5" }
+p2panda-auth = { git = "https://github.com/cafca/p2panda.git", branch = "port-blobs-to-net-v0.5" }
+p2panda-encryption = { git = "https://github.com/cafca/p2panda.git", branch = "port-blobs-to-net-v0.5", features = ["data_scheme"] }
 
 # Async
 tokio = { version = "1", features = ["full"] }
@@ -38,6 +41,10 @@ bytes = "1"
 
 # Platform
 directories = "5"
+tempfile = "3"
+
+# Backup (seed phrase for the identity key)
+bip39 = "2"
 
 # Media
 hound = "3.5"

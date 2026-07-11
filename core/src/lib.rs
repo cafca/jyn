@@ -1,5 +1,6 @@
 pub mod api;
 pub mod app_config;
+pub mod backup;
 pub mod bridge;
 pub mod data_schema;
 pub mod diagnostics;
@@ -15,6 +16,7 @@ pub mod profile;
 pub(crate) mod profile_data;
 pub mod runtime;
 pub mod settings;
+pub mod spaces;
 pub mod state;
 pub mod sync;
 pub mod time_format;

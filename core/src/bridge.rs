@@ -103,6 +103,15 @@ pub enum NetworkCommand {
     RemoveFriend {
         profile_id: String,
     },
+    /// Aligns friends-space membership (group encryption) with the current
+    /// friends list. Idempotent; dispatched after state updates.
+    ReconcileSpaces,
+    /// Writes an encrypted snapshot of identity-critical state (domain +
+    /// profile-data stores) to the given path. Decryptable only with the
+    /// recovery phrase.
+    ExportBackup {
+        dest_path: String,
+    },
     /// Automatic reaction when someone we requested started following us:
     /// follow back, making the friendship mutual.
     FollowBack {
@@ -155,10 +164,12 @@ impl NetworkCommand {
             | Self::SetHeart { .. }
             | Self::PublishComment { .. }
             | Self::KeepPost { .. }
-            | Self::ReleaseKeep { .. } => true,
+            | Self::ReleaseKeep { .. }
+            | Self::ExportBackup { .. } => true,
             Self::RecoverStartup
             | Self::RequestDiagnostics
             | Self::SyncContactProfile { .. }
+            | Self::ReconcileSpaces
             | Self::FollowBack { .. }
             | Self::FetchMedia { .. }
             | Self::DrainExpired => false,
@@ -180,6 +191,8 @@ impl NetworkCommand {
             }
             Self::RespondFriendship { .. } => "answering the friendship request",
             Self::RemoveFriend { .. } => "unfriending",
+            Self::ReconcileSpaces => "updating encryption membership",
+            Self::ExportBackup { .. } => "exporting the backup",
             Self::FollowBack { .. } => "completing the friendship",
             Self::SetHeart { .. } => "casting the heart",
             Self::PublishComment { .. } => "publishing the comment",
@@ -594,21 +607,25 @@ async fn default_handle_command(
             accept,
         } => respond_friendship(&state, requester_profile_id, accept).await,
         NetworkCommand::RemoveFriend { profile_id } => remove_friend(&state, profile_id).await,
+        NetworkCommand::ReconcileSpaces => {
+            let mut sync = state.sync.lock().await;
+            sync.reconcile_spaces().await
+        }
+        NetworkCommand::ExportBackup { dest_path } => export_backup(&state, dest_path).await,
         NetworkCommand::FollowBack { profile_id } => follow_back(&state, profile_id).await,
         NetworkCommand::SetHeart {
             post_author_profile_id,
             post_id,
             active,
         } => {
-            let mut sync = state.sync.lock().await;
-            sync.publish(DomainOperation::HeartChanged {
+            let operation = DomainOperation::HeartChanged {
                 profile_id: state.local_profile_id.clone(),
-                post_author_profile_id,
-                post_id,
+                post_author_profile_id: post_author_profile_id.clone(),
+                post_id: post_id.clone(),
                 active,
                 recorded_at: now_unix_secs(),
-            })
-            .await
+            };
+            publish_interaction(&state, &post_author_profile_id, &post_id, operation).await
         }
         NetworkCommand::PublishComment {
             post_author_profile_id,
@@ -618,16 +635,15 @@ async fn default_handle_command(
             anyhow::ensure!(!body.trim().is_empty(), "a comment needs some words");
             let now = now_unix_secs();
             let comment_id = new_post_id(&state.local_profile_id, now);
-            let mut sync = state.sync.lock().await;
-            sync.publish(DomainOperation::CommentPublished {
+            let operation = DomainOperation::CommentPublished {
                 profile_id: state.local_profile_id.clone(),
                 comment_id,
-                post_author_profile_id,
-                post_id,
+                post_author_profile_id: post_author_profile_id.clone(),
+                post_id: post_id.clone(),
                 body: body.trim().to_owned(),
                 created_at: now,
-            })
-            .await
+            };
+            publish_interaction(&state, &post_author_profile_id, &post_id, operation).await
         }
         NetworkCommand::KeepPost {
             post_author_profile_id,
@@ -651,6 +667,45 @@ async fn default_handle_command(
     }
 }
 
+/// The visibility of a post as its author currently replicates it, from the
+/// author's reduced state (local or contact). `None` = post unknown here.
+async fn post_visibility(
+    state: &RuntimeState,
+    author_profile_id: &str,
+    post_id: &str,
+) -> Result<Option<Visibility>> {
+    let sync = state.sync.lock().await;
+    let author_state = sync.read_profile_state(author_profile_id).await?;
+    Ok(author_state.and_then(|reduced| {
+        reduced
+            .posts
+            .iter()
+            .find(|post| post.post_id == post_id)
+            .map(|post| post.visibility)
+    }))
+}
+
+/// Routes a heart/comment either to plaintext sync (public target post) or
+/// into the post author's encryption space (non-public target post), so the
+/// interaction is visible to exactly the audience that can see the post.
+async fn publish_interaction(
+    state: &RuntimeState,
+    post_author_profile_id: &str,
+    post_id: &str,
+    operation: DomainOperation,
+) -> Result<()> {
+    let visibility = post_visibility(state, post_author_profile_id, post_id)
+        .await?
+        .with_context(|| format!("unknown post {post_id}; cannot react to it"))?;
+    let mut sync = state.sync.lock().await;
+    if visibility == Visibility::Public {
+        sync.publish(operation).await
+    } else {
+        sync.publish_encrypted_to_owner(post_author_profile_id, operation)
+            .await
+    }
+}
+
 /// Downloads an attachment blob from known peers into the media cache.
 /// Failures surface as `MediaFailed` (so the card can stop spinning), not
 /// as UI error lines — media arrives when peers do.
@@ -670,6 +725,77 @@ async fn unpin_and_prune_prefix(state: &RuntimeState, prefix: &str) {
     if let Err(err) = state.node.blobs.pins().delete_prefix(prefix).await {
         tracing::warn!("failed to unpin under {prefix}: {err}");
     }
+}
+
+/// Writes an encrypted snapshot of the identity-critical stores to
+/// `dest_path`. Blob bytes are not included yet (spec phase 2); media
+/// re-fetches from peers after a restore. Restore itself happens before the
+/// node starts, via `crate::backup::restore_backup`.
+async fn export_backup(state: &RuntimeState, dest_path: String) -> Result<()> {
+    let private_key = crate::profile::load_private_key_from_data_dir(&state.node.data_dir)?;
+    let staging = tempfile::tempdir().context("failed to create backup staging dir")?;
+    let mut files: Vec<(String, Vec<u8>)> = Vec::new();
+
+    let domain_snapshot = staging.path().join("domain.sqlite3");
+    {
+        let sync = state.sync.lock().await;
+        sync.snapshot_store_into(&domain_snapshot).await?;
+    }
+    files.push((
+        "domain.sqlite3".to_owned(),
+        std::fs::read(&domain_snapshot).context("failed to read domain snapshot")?,
+    ));
+
+    let profile_snapshot = staging.path().join("profile-store.sqlite3");
+    state.private_posts.snapshot_into(&profile_snapshot).await?;
+    files.push((
+        "profile-store.sqlite3".to_owned(),
+        std::fs::read(&profile_snapshot).context("failed to read profile-data snapshot")?,
+    ));
+
+    files.extend(crate::backup::collect_plain_files(&state.node.data_dir));
+    crate::backup::write_archive(&private_key, files, std::path::Path::new(&dest_path))
+}
+
+/// Finds the per-blob decryption secret for a blob hash by scanning every
+/// post source that can reference it: our own stream, friends' streams,
+/// local private posts, and kept snapshots. `None` = plaintext (public) blob.
+async fn find_blob_secret(state: &RuntimeState, blob_hash: &str) -> Result<Option<Vec<u8>>> {
+    let secret_in = |posts: &[crate::domain::ReducedPost]| {
+        posts.iter().find_map(|post| {
+            post.media
+                .iter()
+                .find(|attachment| attachment.blob_hash == blob_hash)
+                .and_then(|attachment| attachment.blob_secret.clone())
+        })
+    };
+
+    let sync = state.sync.lock().await;
+    let local_state = sync.read_profile_state(&state.local_profile_id).await?;
+    if let Some(local) = &local_state {
+        if let Some(secret) = secret_in(&local.posts) {
+            return Ok(Some(secret));
+        }
+        for contact_id in &local.followed_profile_ids {
+            if let Some(contact) = sync.read_profile_state(contact_id).await? {
+                if let Some(secret) = secret_in(&contact.posts) {
+                    return Ok(Some(secret));
+                }
+            }
+        }
+    }
+    drop(sync);
+
+    if let Some(secret) = secret_in(&state.private_posts.list()?) {
+        return Ok(Some(secret));
+    }
+    let kept: Vec<crate::domain::ReducedPost> = state
+        .keeps
+        .list()?
+        .into_iter()
+        .map(|keep| keep.snapshot)
+        .collect();
+    Ok(secret_in(&kept))
 }
 
 async fn fetch_media(
@@ -702,6 +828,16 @@ async fn fetch_media(
             .finish()
             .await
             .map_err(|err| anyhow::anyhow!("failed to export blob {blob_hash}: {err}"))?;
+        // Encrypted blob (non-public post): the store holds ciphertext, the
+        // cache holds plaintext. The per-blob secret comes from whichever
+        // post payload references this hash.
+        if let Some(secret) = find_blob_secret(state, &blob_hash).await? {
+            let ciphertext = std::fs::read(&path)
+                .with_context(|| format!("failed to read exported blob {blob_hash}"))?;
+            let plaintext = crate::media::blob_crypto::decrypt_blob(&ciphertext, &secret)?;
+            std::fs::write(&path, plaintext)
+                .with_context(|| format!("failed to write decrypted blob {blob_hash}"))?;
+        }
         crate::media::evict_to_budget(
             &state.media_cache_dir,
             crate::media::MEDIA_CACHE_BUDGET_BYTES,
@@ -877,6 +1013,9 @@ async fn respond_friendship(
         })
         .await?;
         sync.sync_contact_profile(&requester_profile_id).await?;
+        // Add the new friend to the encryption space as soon as their key
+        // bundle allows; retried on later state updates if it hasn't arrived.
+        let _ = sync.reconcile_spaces().await;
     }
     Ok(())
 }
@@ -892,6 +1031,9 @@ async fn remove_friend(state: &RuntimeState, profile_id: String) -> Result<()> {
     .await?;
     sync.stop_contact_sync(&profile_id);
     state.outgoing_requests.remove(&profile_id)?;
+    // Removing them from the friends space re-keys it, so they cannot read
+    // anything published from here on.
+    sync.reconcile_spaces().await?;
     Ok(())
 }
 
@@ -906,6 +1048,7 @@ async fn follow_back(state: &RuntimeState, profile_id: String) -> Result<()> {
     .await?;
     sync.sync_contact_profile(&profile_id).await?;
     state.outgoing_requests.remove(&profile_id)?;
+    let _ = sync.reconcile_spaces().await;
     Ok(())
 }
 
@@ -976,7 +1119,16 @@ async fn publish_post(
     let now = now_unix_secs();
     let post_id = new_post_id(&state.local_profile_id, now);
     let expires_at = draft.lifetime_secs.map(|secs| now + secs);
-    let media = import_attachments(state, event_tx, &post_id, &draft.media).await?;
+    // Everything non-public is sealed — including local-only Private posts,
+    // so their blobs are unreadable even if the content hash ever leaks.
+    let media = import_attachments(
+        state,
+        event_tx,
+        &post_id,
+        &draft.media,
+        draft.visibility != Visibility::Public,
+    )
+    .await?;
 
     if draft.visibility == Visibility::Private {
         state.private_posts.upsert(crate::domain::ReducedPost {
@@ -997,8 +1149,7 @@ async fn publish_post(
         return Ok(());
     }
 
-    let mut sync = state.sync.lock().await;
-    sync.publish(DomainOperation::PostPublished {
+    let operation = DomainOperation::PostPublished {
         profile_id: state.local_profile_id.clone(),
         post_id,
         body: draft.body,
@@ -1006,18 +1157,31 @@ async fn publish_post(
         visibility: draft.visibility,
         expires_at,
         created_at: now,
-    })
-    .await
+    };
+    let mut sync = state.sync.lock().await;
+    if draft.visibility == Visibility::Public {
+        sync.publish(operation).await
+    } else {
+        // Friends and (until they exist separately) Circles posts encrypt to
+        // the friends space; only members can read them.
+        sync.publish_encrypted(operation).await
+    }
 }
 
 /// Imports staged files into the blob store, pins them under the post, and
 /// copies them into the media cache so the author's own UI renders them
 /// without a fetch.
+///
+/// With `encrypt` set (non-public posts), each file is sealed under a fresh
+/// per-blob key before it enters the store: the blob replicates as
+/// ciphertext, its content address is the ciphertext hash, and the key rides
+/// in the attachment metadata inside the group-encrypted post payload.
 async fn import_attachments(
     state: &RuntimeState,
     event_tx: &Sender<NetworkEvent>,
     post_id: &str,
     drafts: &[MediaDraft],
+    encrypt: bool,
 ) -> Result<Vec<crate::domain::MediaAttachment>> {
     let mut attachments = Vec::with_capacity(drafts.len());
     for media in drafts {
@@ -1034,6 +1198,18 @@ async fn import_attachments(
                 media.path.display()
             );
         }
+        let (import_path, blob_secret, _ciphertext_guard) = if encrypt {
+            let plaintext = std::fs::read(&media.path)
+                .with_context(|| format!("failed to read attachment {}", media.path.display()))?;
+            let (ciphertext, secret) = crate::media::blob_crypto::encrypt_blob(&plaintext)?;
+            let sealed = tempfile::NamedTempFile::new()
+                .context("failed to create sealed attachment file")?;
+            std::fs::write(sealed.path(), &ciphertext)
+                .context("failed to write sealed attachment")?;
+            (sealed.path().to_path_buf(), Some(secret), Some(sealed))
+        } else {
+            (media.path.clone(), None, None)
+        };
         // Import under a single named pin. Awaiting add_path() directly would
         // also create an auto-tag that nothing ever cleans up, so the blob
         // would survive unpin forever; holding a temp tag while we set only
@@ -1042,7 +1218,7 @@ async fn import_attachments(
         let temp_tag = state
             .node
             .blobs
-            .add_path(&media.path)
+            .add_path(&import_path)
             .temp_tag()
             .await
             .map_err(|err| anyhow::anyhow!("failed to import {}: {err}", media.path.display()))?;
@@ -1057,6 +1233,8 @@ async fn import_attachments(
             .map_err(|err| anyhow::anyhow!("failed to pin attachment: {err}"))?;
         drop(temp_tag);
 
+        // The cache always holds plaintext (keyed by blob hash), so the
+        // author's UI renders without decrypting.
         std::fs::create_dir_all(&state.media_cache_dir).ok();
         let cached = state.media_cache_dir.join(&blob_hash);
         if !cached.exists() && std::fs::copy(&media.path, &cached).is_ok() {
@@ -1084,6 +1262,7 @@ async fn import_attachments(
                 .path
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned()),
+            blob_secret,
         });
     }
     Ok(attachments)
@@ -1097,8 +1276,33 @@ async fn edit_post(
     kept_media: Vec<crate::domain::MediaAttachment>,
     new_media: Vec<MediaDraft>,
 ) -> Result<()> {
+    // Visibility decides whether new attachments are sealed, so resolve it
+    // before importing: local-only private posts and replicated non-public
+    // posts both get encrypted blobs.
+    let is_private = state
+        .private_posts
+        .list()?
+        .iter()
+        .any(|post| post.post_id == post_id);
+    let visibility = if is_private {
+        Visibility::Private
+    } else {
+        post_visibility(state, &state.local_profile_id, &post_id)
+            .await?
+            .unwrap_or(Visibility::Public)
+    };
+
     let mut media = kept_media;
-    media.extend(import_attachments(state, event_tx, &post_id, &new_media).await?);
+    media.extend(
+        import_attachments(
+            state,
+            event_tx,
+            &post_id,
+            &new_media,
+            visibility != Visibility::Public,
+        )
+        .await?,
+    );
     anyhow::ensure!(
         !body.trim().is_empty() || !media.is_empty(),
         "a post needs some words or something attached"
@@ -1114,15 +1318,19 @@ async fn edit_post(
         return Ok(());
     }
 
-    let mut sync = state.sync.lock().await;
-    sync.publish(DomainOperation::PostEdited {
+    let operation = DomainOperation::PostEdited {
         profile_id: state.local_profile_id.clone(),
         post_id,
         body,
         media: Some(media),
         edited_at: now_unix_secs(),
-    })
-    .await
+    };
+    let mut sync = state.sync.lock().await;
+    if visibility == Visibility::Public {
+        sync.publish(operation).await
+    } else {
+        sync.publish_encrypted(operation).await
+    }
 }
 
 async fn delete_post(
@@ -1140,13 +1348,20 @@ async fn delete_post(
         return Ok(());
     }
 
-    let mut sync = state.sync.lock().await;
-    sync.publish(DomainOperation::PostDeleted {
+    let visibility = post_visibility(state, &state.local_profile_id, &post_id)
+        .await?
+        .unwrap_or(Visibility::Public);
+    let operation = DomainOperation::PostDeleted {
         profile_id: state.local_profile_id.clone(),
         post_id: post_id.clone(),
         deleted_at: now_unix_secs(),
-    })
-    .await?;
+    };
+    let mut sync = state.sync.lock().await;
+    if visibility == Visibility::Public {
+        sync.publish(operation).await?;
+    } else {
+        sync.publish_encrypted(operation).await?;
+    }
     drop(sync);
     unpin_and_prune_prefix(state, &format!("feed/{post_id}/")).await;
     Ok(())
@@ -1167,14 +1382,21 @@ async fn set_post_lifetime(
         return Ok(());
     }
 
-    let mut sync = state.sync.lock().await;
-    sync.publish(DomainOperation::PostLifetimeChanged {
+    let visibility = post_visibility(state, &state.local_profile_id, &post_id)
+        .await?
+        .unwrap_or(Visibility::Public);
+    let operation = DomainOperation::PostLifetimeChanged {
         profile_id: state.local_profile_id.clone(),
         post_id,
         expires_at,
         changed_at: now_unix_secs(),
-    })
-    .await
+    };
+    let mut sync = state.sync.lock().await;
+    if visibility == Visibility::Public {
+        sync.publish(operation).await
+    } else {
+        sync.publish_encrypted(operation).await
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

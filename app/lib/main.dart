@@ -12,6 +12,7 @@ import 'src/rust/api/lifecycle.dart';
 import 'src/rust/frb_generated.dart';
 import 'src/screens/home_screen.dart';
 import 'src/screens/onboarding_screen.dart';
+import 'src/screens/restore_gate.dart';
 import 'src/shot/shot.dart';
 import 'src/theme/tokens.dart';
 
@@ -26,6 +27,11 @@ Future<void> main() async {
   }
   await RustLib.init(externalLibrary: await _loadCore());
   await _initAutoUpdater();
+  // Restore is only possible before the node opens its stores, so a fresh
+  // machine gets one chance to bring a backup in first.
+  if (await isFreshInstall()) {
+    await runRestoreGate();
+  }
   await startNode();
   runApp(const ProviderScope(child: JynApp()));
 }

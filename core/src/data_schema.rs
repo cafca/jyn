@@ -15,7 +15,13 @@ use tracing::{info, warn};
 /// store runs GC. Legacy stores carry double-tagged, never-collectable blobs
 /// and a permanent (never-evicted) media cache, so they are wiped for a clean
 /// baseline rather than migrated.
-pub const DATA_SCHEMA_VERSION: u32 = 2;
+/// v3: group encryption flag day (docs/2026-07-05-post-encryption-spec.md).
+/// Non-public posts and their blobs are now encrypted; existing plaintext
+/// content already replicated in the clear, so per the spec it is wiped, not
+/// migrated. The sync topic namespace moved to `jyn/domain/v2`, so pre-v3
+/// clients never even share topics with encrypted ones. The identity keypair
+/// survives: profile ids and friend codes stay stable, friendships re-form.
+pub const DATA_SCHEMA_VERSION: u32 = 3;
 
 const SCHEMA_VERSION_FILE: &str = "schema.version";
 

@@ -47,6 +47,18 @@ impl PrivatePostsStore {
         Self { pool }
     }
 
+    /// Snapshots the whole profile-data store (private posts, keeps,
+    /// outgoing requests share one database) into `dest` via `VACUUM INTO`,
+    /// which is consistent while the store is live.
+    pub async fn snapshot_into(&self, dest: &Path) -> Result<()> {
+        let dest = dest.to_string_lossy().replace('\'', "''");
+        sqlx::query(&format!("VACUUM INTO '{dest}'"))
+            .execute(&self.pool)
+            .await
+            .context("failed to snapshot profile data store")?;
+        Ok(())
+    }
+
     pub fn list(&self) -> Result<Vec<ReducedPost>> {
         Ok(load_json_key(&self.pool, PRIVATE_POSTS_KEY)?.unwrap_or_default())
     }

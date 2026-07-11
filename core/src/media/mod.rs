@@ -6,6 +6,7 @@
 //! [`wav_summary`] reduces them to the peaks + duration that travel inside
 //! the post operation.
 
+pub mod blob_crypto;
 pub mod waveform;
 
 use std::collections::{HashMap, HashSet};

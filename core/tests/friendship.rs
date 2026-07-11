@@ -71,6 +71,9 @@ fn friend_code_for(profile_id: &str, relay_url: &str, name: &str) -> Result<Stri
 
 #[tokio::test(flavor = "multi_thread")]
 async fn request_accept_and_posts_flow_both_ways() -> Result<()> {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .try_init();
     std::env::set_var("JYN_MAINTENANCE_INTERVAL_SECS", "3");
     let (_relay_map, relay_url, _relay_server) = run_relay_server().await?;
     let node_options = NodeOptions {

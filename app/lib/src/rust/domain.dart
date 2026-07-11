@@ -25,6 +25,12 @@ class MediaAttachment {
   /// Original file name, used by the external-open fallback card.
   final String? fileName;
 
+  /// Per-blob AEAD key + nonce (32 + 12 bytes) when the blob replicates as
+  /// ciphertext. Only ever present inside encrypted post payloads, so the
+  /// key is protected by the group encryption around it. `None` = plaintext
+  /// blob (public posts).
+  final Uint8List? blobSecret;
+
   const MediaAttachment({
     required this.kind,
     required this.blobHash,
@@ -35,6 +41,7 @@ class MediaAttachment {
     this.width,
     this.height,
     this.fileName,
+    this.blobSecret,
   });
 
   @override
@@ -47,7 +54,8 @@ class MediaAttachment {
       waveform.hashCode ^
       width.hashCode ^
       height.hashCode ^
-      fileName.hashCode;
+      fileName.hashCode ^
+      blobSecret.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -62,7 +70,8 @@ class MediaAttachment {
           waveform == other.waveform &&
           width == other.width &&
           height == other.height &&
-          fileName == other.fileName;
+          fileName == other.fileName &&
+          blobSecret == other.blobSecret;
 }
 
 enum MediaKind { photo, audio, video, file }
