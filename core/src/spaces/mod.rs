@@ -69,6 +69,34 @@ impl SpaceKind {
 /// the auth CRDT state is stored under this key.
 const GLOBAL_GROUPS_CONTEXT_ID: &[u8] = b"global-groups-context";
 
+/// The auto-derived circles audience: accepted friends plus every friend's
+/// friends, as read from their replicated (mandatorily visible) follow lists.
+/// Never includes the local profile itself.
+pub(crate) async fn derive_circle_members(
+    domain: &JynOperationDomain,
+    local_profile_id: &str,
+) -> Result<Vec<String>> {
+    let Some(own) = domain.read_profile_state(local_profile_id).await? else {
+        return Ok(Vec::new());
+    };
+    let mut members: HashSet<String> = own.followed_profile_ids.iter().cloned().collect();
+    for friend_id in &own.followed_profile_ids {
+        match domain.read_profile_state(friend_id).await {
+            Ok(Some(friend_state)) => {
+                members.extend(friend_state.followed_profile_ids.iter().cloned());
+            }
+            Ok(None) => {}
+            Err(err) => {
+                warn!("failed to read friend state for circle derivation: {err:#}");
+            }
+        }
+    }
+    members.remove(local_profile_id);
+    let mut members: Vec<String> = members.into_iter().collect();
+    members.sort();
+    Ok(members)
+}
+
 /// Builds an X25519 secret from raw bytes via its serde representation
 /// (`SecretKey::from_bytes` is private in the pinned p2panda revision). The
 /// bytes are clamped first, exactly like `from_bytes` would, so the stored
@@ -244,27 +272,44 @@ impl JynSpaces {
     /// Aligns friends-space membership with the accepted-friends list.
     /// Friends whose key bundles we have not yet processed are skipped and
     /// picked up on a later reconcile (triggered by their bundle arriving).
-    pub async fn reconcile_friends(&self, friend_ids: &[String]) -> Result<()> {
+    ///
+    /// The desired member set is derived *inside* the operations lock —
+    /// applying a set computed earlier could resurrect a member another task
+    /// removed in between, and a data-scheme re-add hands back past group
+    /// secrets, silently widening the audience of already-sealed posts.
+    pub async fn reconcile_friends(&self) -> Result<()> {
         let _guard = self.ops_lock.lock().await;
+        let desired = self.desired_friend_ids().await?;
         // Our space's local auth-graph copy can trail the global graph when
         // friends' auth operations were processed first; mutating a stale
         // space corrupts (or panics) the resolver, so catch up first.
         self.repair_spaces().await?;
-        self.reconcile_space(self.my_space_id, friend_ids, true)
-            .await
+        self.reconcile_space(self.my_space_id, &desired, true).await
     }
 
     /// Aligns circles-space membership with the derived friends-of-friends
-    /// set. Additions are always applied (cheap — the new member just gets
-    /// the current secret); removals re-key the space, so they only run with
+    /// set (computed inside the lock, see [`Self::reconcile_friends`]).
+    /// Additions are always applied (cheap — the new member just gets the
+    /// current secret); removals re-key the space, so they only run with
     /// `remove_stale` — the lazy re-key right before the next Circles post,
     /// per the spec, bounding re-key frequency to publish frequency instead
     /// of membership-churn frequency.
-    pub async fn reconcile_circles(&self, member_ids: &[String], remove_stale: bool) -> Result<()> {
+    pub async fn reconcile_circles(&self, remove_stale: bool) -> Result<()> {
         let _guard = self.ops_lock.lock().await;
+        let desired = derive_circle_members(&self.domain, &self.local_profile_id).await?;
         self.repair_spaces().await?;
-        self.reconcile_space(self.my_circles_space_id, member_ids, remove_stale)
+        self.reconcile_space(self.my_circles_space_id, &desired, remove_stale)
             .await
+    }
+
+    /// The accepted-friends list from the local profile's reduced state.
+    async fn desired_friend_ids(&self) -> Result<Vec<String>> {
+        Ok(self
+            .domain
+            .read_profile_state(&self.local_profile_id)
+            .await?
+            .map(|state| state.followed_profile_ids)
+            .unwrap_or_default())
     }
 
     /// Adds/removes members of one of our own spaces to match `desired_ids`.
@@ -351,6 +396,15 @@ impl JynSpaces {
     pub async fn encrypt_local(&self, kind: SpaceKind, inner: &DomainOperation) -> Result<()> {
         let _guard = self.ops_lock.lock().await;
         self.repair_spaces().await?;
+        if kind == SpaceKind::Circles {
+            // The spec's lazy re-key: align circle membership — removals
+            // included — right before sealing, under the same lock, so no
+            // interleaved reconcile can re-admit a dropped member between
+            // the re-key and the encryption.
+            let desired = derive_circle_members(&self.domain, &self.local_profile_id).await?;
+            self.reconcile_space(self.my_circles_space_id, &desired, true)
+                .await?;
+        }
         self.encrypt_to_space(self.own_space_id(kind), inner).await
     }
 

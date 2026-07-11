@@ -34,7 +34,7 @@ use crate::domain::{
 };
 use crate::node::AppNode;
 use crate::profile::load_private_key_from_data_dir;
-use crate::spaces::{JynSpaces, SpaceKind};
+use crate::spaces::{derive_circle_members, JynSpaces, SpaceKind};
 
 const DOMAIN_DB_FILE: &str = "domain.sqlite3";
 const CONTACT_BOOTSTRAP_SETTLE_MILLIS: u64 = 750;
@@ -217,18 +217,15 @@ impl JynSyncService {
     /// Encrypts a domain operation to one of our own spaces and pushes the
     /// resulting wrapper operations into live sync.
     ///
-    /// A Circles publish first fully reconciles circles membership including
-    /// removals — the spec's lazy re-key: dropped friends-of-friends only
-    /// cost a re-key when there is actually something new to protect.
+    /// A Circles publish reconciles circles membership including removals
+    /// right before sealing, inside the spaces lock — the spec's lazy
+    /// re-key: dropped friends-of-friends only cost a re-key when there is
+    /// actually something new to protect.
     pub(crate) async fn publish_encrypted(
         &mut self,
         operation: DomainOperation,
         kind: SpaceKind,
     ) -> Result<()> {
-        if kind == SpaceKind::Circles {
-            let members = derive_circle_members(&self.domain, &self.local_profile_id).await?;
-            self.spaces.reconcile_circles(&members, true).await?;
-        }
         self.spaces.encrypt_local(kind, &operation).await?;
         self.flush_spaces_outbox();
         self.emit_local_state().await;
@@ -258,16 +255,19 @@ impl JynSyncService {
     /// topics of new circle members, so their key bundles and posts flow.
     /// Idempotent and cheap when nothing changed.
     pub(crate) async fn reconcile_spaces(&mut self) -> Result<()> {
+        // Membership itself is derived inside the spaces lock (a set
+        // computed here could go stale while another task re-keys); the
+        // lists below only decide which topics to join.
+        self.spaces.reconcile_friends().await?;
+        self.spaces.reconcile_circles(false).await?;
+        self.flush_spaces_outbox();
+
         let friends = self
             .read_profile_state(&self.local_profile_id)
             .await?
             .map(|state| state.followed_profile_ids)
             .unwrap_or_default();
-        self.spaces.reconcile_friends(&friends).await?;
         let members = derive_circle_members(&self.domain, &self.local_profile_id).await?;
-        self.spaces.reconcile_circles(&members, false).await?;
-        self.flush_spaces_outbox();
-
         for member in members {
             if friends.contains(&member) || self.contact_streams.contains_key(&member) {
                 continue;
@@ -490,35 +490,6 @@ impl JynSyncService {
     }
 }
 
-/// The auto-derived circles audience: accepted friends plus every friend's
-/// friends, as read from their replicated (mandatorily visible) follow lists.
-/// Never includes the local profile itself.
-async fn derive_circle_members(
-    domain: &JynOperationDomain,
-    local_profile_id: &str,
-) -> Result<Vec<String>> {
-    let Some(own) = domain.read_profile_state(local_profile_id).await? else {
-        return Ok(Vec::new());
-    };
-    let mut members: std::collections::HashSet<String> =
-        own.followed_profile_ids.iter().cloned().collect();
-    for friend_id in &own.followed_profile_ids {
-        match domain.read_profile_state(friend_id).await {
-            Ok(Some(friend_state)) => {
-                members.extend(friend_state.followed_profile_ids.iter().cloned());
-            }
-            Ok(None) => {}
-            Err(err) => {
-                tracing::warn!("failed to read friend state for circle derivation: {err:#}");
-            }
-        }
-    }
-    members.remove(local_profile_id);
-    let mut members: Vec<String> = members.into_iter().collect();
-    members.sort();
-    Ok(members)
-}
-
 async fn open_domain_store(data_dir: &Path) -> Result<DomainStore> {
     std::fs::create_dir_all(data_dir).with_context(|| {
         format!(
@@ -574,24 +545,13 @@ fn spawn_topic_task(
                 }
             }
             if !report.new_key_bundles.is_empty() {
-                let friends = match domain.read_profile_state(local_profile_id).await {
-                    Ok(Some(state)) => state.followed_profile_ids,
-                    _ => Vec::new(),
-                };
-                if let Err(err) = spaces.reconcile_friends(&friends).await {
+                if let Err(err) = spaces.reconcile_friends().await {
                     tracing::warn!("spaces reconcile failed: {err:#}");
                 }
-                match derive_circle_members(domain, local_profile_id).await {
-                    Ok(members) => {
-                        // Additions only; removals re-key and wait for the
-                        // next Circles post.
-                        if let Err(err) = spaces.reconcile_circles(&members, false).await {
-                            tracing::warn!("circles reconcile failed: {err:#}");
-                        }
-                    }
-                    Err(err) => {
-                        tracing::warn!("failed to derive circle members: {err:#}");
-                    }
+                // Additions only; removals re-key and wait for the next
+                // Circles post.
+                if let Err(err) = spaces.reconcile_circles(false).await {
+                    tracing::warn!("circles reconcile failed: {err:#}");
                 }
                 for operation in spaces.drain_outbox() {
                     if let Err(err) = local_handle.publish(operation) {
