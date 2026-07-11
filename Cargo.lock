@@ -3786,8 +3786,8 @@ dependencies = [
 
 [[package]]
 name = "p2panda-auth"
-version = "0.6.1"
-source = "git+https://github.com/cafca/p2panda.git?branch=port-blobs-to-net-v0.5#09ff2469867f289e64807808ebf3cc188f17a6a0"
+version = "0.7.0"
+source = "git+https://github.com/cafca/p2panda.git?branch=blobs-port#8f26698c8dbec7e721e18d6eb95d2fc434d0dd92"
 dependencies = [
  "p2panda-core",
  "petgraph",
@@ -3798,8 +3798,8 @@ dependencies = [
 
 [[package]]
 name = "p2panda-blobs"
-version = "0.6.1"
-source = "git+https://github.com/cafca/p2panda.git?branch=port-blobs-to-net-v0.5#09ff2469867f289e64807808ebf3cc188f17a6a0"
+version = "0.7.0"
+source = "git+https://github.com/cafca/p2panda.git?branch=blobs-port#8f26698c8dbec7e721e18d6eb95d2fc434d0dd92"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -3812,8 +3812,8 @@ dependencies = [
 
 [[package]]
 name = "p2panda-core"
-version = "0.6.1"
-source = "git+https://github.com/cafca/p2panda.git?branch=port-blobs-to-net-v0.5#09ff2469867f289e64807808ebf3cc188f17a6a0"
+version = "0.7.0"
+source = "git+https://github.com/cafca/p2panda.git?branch=blobs-port#8f26698c8dbec7e721e18d6eb95d2fc434d0dd92"
 dependencies = [
  "blake3",
  "ciborium",
@@ -3829,8 +3829,8 @@ dependencies = [
 
 [[package]]
 name = "p2panda-discovery"
-version = "0.6.1"
-source = "git+https://github.com/cafca/p2panda.git?branch=port-blobs-to-net-v0.5#09ff2469867f289e64807808ebf3cc188f17a6a0"
+version = "0.7.0"
+source = "git+https://github.com/cafca/p2panda.git?branch=blobs-port#8f26698c8dbec7e721e18d6eb95d2fc434d0dd92"
 dependencies = [
  "blake3",
  "futures-util",
@@ -3845,8 +3845,8 @@ dependencies = [
 
 [[package]]
 name = "p2panda-encryption"
-version = "0.6.1"
-source = "git+https://github.com/cafca/p2panda.git?branch=port-blobs-to-net-v0.5#09ff2469867f289e64807808ebf3cc188f17a6a0"
+version = "0.7.0"
+source = "git+https://github.com/cafca/p2panda.git?branch=blobs-port#8f26698c8dbec7e721e18d6eb95d2fc434d0dd92"
 dependencies = [
  "chacha20poly1305",
  "curve25519-dalek 4.1.3",
@@ -3869,8 +3869,8 @@ dependencies = [
 
 [[package]]
 name = "p2panda-net"
-version = "0.6.1"
-source = "git+https://github.com/cafca/p2panda.git?branch=port-blobs-to-net-v0.5#09ff2469867f289e64807808ebf3cc188f17a6a0"
+version = "0.7.0"
+source = "git+https://github.com/cafca/p2panda.git?branch=blobs-port#8f26698c8dbec7e721e18d6eb95d2fc434d0dd92"
 dependencies = [
  "futures-channel",
  "futures-util",
@@ -3898,8 +3898,8 @@ dependencies = [
 
 [[package]]
 name = "p2panda-spaces"
-version = "0.6.1"
-source = "git+https://github.com/cafca/p2panda.git?branch=port-blobs-to-net-v0.5#09ff2469867f289e64807808ebf3cc188f17a6a0"
+version = "0.7.0"
+source = "git+https://github.com/cafca/p2panda.git?branch=blobs-port#8f26698c8dbec7e721e18d6eb95d2fc434d0dd92"
 dependencies = [
  "p2panda-auth",
  "p2panda-core",
@@ -3913,8 +3913,8 @@ dependencies = [
 
 [[package]]
 name = "p2panda-store"
-version = "0.6.1"
-source = "git+https://github.com/cafca/p2panda.git?branch=port-blobs-to-net-v0.5#09ff2469867f289e64807808ebf3cc188f17a6a0"
+version = "0.7.0"
+source = "git+https://github.com/cafca/p2panda.git?branch=blobs-port#8f26698c8dbec7e721e18d6eb95d2fc434d0dd92"
 dependencies = [
  "p2panda-auth",
  "p2panda-core",
@@ -3929,8 +3929,8 @@ dependencies = [
 
 [[package]]
 name = "p2panda-stream"
-version = "0.6.1"
-source = "git+https://github.com/cafca/p2panda.git?branch=port-blobs-to-net-v0.5#09ff2469867f289e64807808ebf3cc188f17a6a0"
+version = "0.7.0"
+source = "git+https://github.com/cafca/p2panda.git?branch=blobs-port#8f26698c8dbec7e721e18d6eb95d2fc434d0dd92"
 dependencies = [
  "futures-util",
  "p2panda-auth",
@@ -3946,8 +3946,8 @@ dependencies = [
 
 [[package]]
 name = "p2panda-sync"
-version = "0.6.1"
-source = "git+https://github.com/cafca/p2panda.git?branch=port-blobs-to-net-v0.5#09ff2469867f289e64807808ebf3cc188f17a6a0"
+version = "0.7.0"
+source = "git+https://github.com/cafca/p2panda.git?branch=blobs-port#8f26698c8dbec7e721e18d6eb95d2fc434d0dd92"
 dependencies = [
  "futures-channel",
  "futures-util",
