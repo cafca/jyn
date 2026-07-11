@@ -179,3 +179,25 @@ wire and at rest.
   a first-class concern, not an afterthought.
 - **Friend-list exposure is mandatory** — a deliberate privacy stance worth
   surfacing clearly to users at onboarding.
+
+## Phase 2 implementation notes (2026-07-11)
+
+- Circles is a second single-admin space per profile (id derived via HKDF
+  `jyn/circles-space/v1`). Which of an owner's two spaces is which stays
+  blinded on the wire; members learn the mapping from the visibility of
+  posts they could decrypt, and interactions route by it.
+- Two spaces per author exposed an upstream flaw: auth operations chained
+  on *global* graph heads, so one author's groups referenced each other and
+  space copies (which only witness their own group) held dangling graph
+  references — the auth resolver panicked once concurrency touched them.
+  Fixed on the fork branch `circles-group-scoped-auth` (p2panda-spaces:
+  group-scoped dependencies, repair and repair-detection). Trade-off:
+  nested groups as space members don't resolve on that branch; jyn only
+  adds individuals.
+- Circle members' (friends-of-friends) topics are synced so their key
+  bundles and their circles posts flow; the river shows their posts. The
+  automatic follow-back is guarded by the outgoing-requests list so a
+  synced non-friend can't befriend us by following us.
+- Backup media modes: full (default) / kept-only / metadata-only. Expired
+  blobs are never archived; restore stages blob bytes and the next start
+  re-imports and re-pins them from the restored records.

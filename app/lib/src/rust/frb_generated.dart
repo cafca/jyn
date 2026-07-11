@@ -76,7 +76,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => 1121507118;
+  int get rustContentHash => -79869872;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -171,6 +171,10 @@ abstract class RustLibApi extends BaseApi {
   });
 
   Future<bool> crateApiSettingsSetMdnsEnabled({required bool enabled});
+
+  Future<bool> crateApiSettingsSetMediaBackupMode({
+    required MediaBackupMode mode,
+  });
 
   Future<void> crateApiCommandsSetPostLifetime({
     required String postId,
@@ -956,6 +960,39 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(debugName: "set_mdns_enabled", argNames: ["enabled"]);
 
   @override
+  Future<bool> crateApiSettingsSetMediaBackupMode({
+    required MediaBackupMode mode,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_media_backup_mode(mode, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 25,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_bool,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiSettingsSetMediaBackupModeConstMeta,
+        argValues: [mode],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiSettingsSetMediaBackupModeConstMeta =>
+      const TaskConstMeta(
+        debugName: "set_media_backup_mode",
+        argNames: ["mode"],
+      );
+
+  @override
   Future<void> crateApiCommandsSetPostLifetime({
     required String postId,
     int? expiresAt,
@@ -969,7 +1006,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 25,
+            funcId: 26,
             port: port_,
           );
         },
@@ -1004,7 +1041,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 26,
+            funcId: 27,
             port: port_,
           );
         },
@@ -1035,7 +1072,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 27,
+            funcId: 28,
             port: port_,
           );
         },
@@ -1075,7 +1112,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 28,
+            funcId: 29,
             port: port_,
           );
         },
@@ -1118,7 +1155,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 29,
+            funcId: 30,
             port: port_,
           );
         },
@@ -1444,6 +1481,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  MediaBackupMode dco_decode_media_backup_mode(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return MediaBackupMode.values[raw as int];
+  }
+
+  @protected
   MediaDraftInput dco_decode_media_draft_input(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
@@ -1612,13 +1655,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   SettingsView dco_decode_settings_view(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 4)
-      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    if (arr.length != 5)
+      throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
     return SettingsView(
       mdnsEnabled: dco_decode_bool(arr[0]),
       relayMode: dco_decode_relay_mode(arr[1]),
       customRelayUrl: dco_decode_opt_String(arr[2]),
       defaultDownloadDir: dco_decode_opt_String(arr[3]),
+      mediaBackupMode: dco_decode_media_backup_mode(arr[4]),
     );
   }
 
@@ -2094,6 +2138,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  MediaBackupMode sse_decode_media_backup_mode(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var inner = sse_decode_i_32(deserializer);
+    return MediaBackupMode.values[inner];
+  }
+
+  @protected
   MediaDraftInput sse_decode_media_draft_input(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_path = sse_decode_String(deserializer);
@@ -2310,11 +2361,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_relayMode = sse_decode_relay_mode(deserializer);
     var var_customRelayUrl = sse_decode_opt_String(deserializer);
     var var_defaultDownloadDir = sse_decode_opt_String(deserializer);
+    var var_mediaBackupMode = sse_decode_media_backup_mode(deserializer);
     return SettingsView(
       mdnsEnabled: var_mdnsEnabled,
       relayMode: var_relayMode,
       customRelayUrl: var_customRelayUrl,
       defaultDownloadDir: var_defaultDownloadDir,
+      mediaBackupMode: var_mediaBackupMode,
     );
   }
 
@@ -2752,6 +2805,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_media_backup_mode(
+    MediaBackupMode self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.index, serializer);
+  }
+
+  @protected
   void sse_encode_media_draft_input(
     MediaDraftInput self,
     SseSerializer serializer,
@@ -2920,6 +2982,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_relay_mode(self.relayMode, serializer);
     sse_encode_opt_String(self.customRelayUrl, serializer);
     sse_encode_opt_String(self.defaultDownloadDir, serializer);
+    sse_encode_media_backup_mode(self.mediaBackupMode, serializer);
   }
 
   @protected

@@ -16,6 +16,20 @@ pub enum RelayMode {
     Disabled,
 }
 
+/// How much media a backup archive carries. Expired posts' blobs are never
+/// included in any mode — backing them up would undo their ephemerality.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaBackupMode {
+    /// Blobs of all live posts (own, private, friends') plus keeps.
+    #[default]
+    Full,
+    /// Only keeps and private posts — media that no peer can re-serve.
+    KeptOnly,
+    /// No blob bytes; media re-fetches from peers after a restore.
+    MetadataOnly,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppSettings {
     #[serde(default)]
@@ -26,6 +40,8 @@ pub struct AppSettings {
     pub relay_mode: RelayMode,
     #[serde(default)]
     pub custom_relay_url: Option<String>,
+    #[serde(default)]
+    pub media_backup_mode: MediaBackupMode,
 }
 
 impl Default for AppSettings {
@@ -35,6 +51,7 @@ impl Default for AppSettings {
             mdns_enabled: default_mdns_enabled(),
             relay_mode: RelayMode::TestingRelay,
             custom_relay_url: None,
+            media_backup_mode: MediaBackupMode::default(),
         }
     }
 }
@@ -82,6 +99,15 @@ impl SettingsStore {
             self.save()?;
         }
         Ok(())
+    }
+
+    pub fn set_media_backup_mode(&mut self, mode: MediaBackupMode) -> Result<bool> {
+        let changed = self.settings.media_backup_mode != mode;
+        if changed {
+            self.settings.media_backup_mode = mode;
+            self.save()?;
+        }
+        Ok(changed)
     }
 
     pub fn set_mdns_enabled(&mut self, enabled: bool) -> Result<bool> {
@@ -270,6 +296,24 @@ mod tests {
         settings.custom_relay_url = Some("http://relay.example.com".into());
         assert!(settings.relay_url_for_node().is_err());
 
+        Ok(())
+    }
+
+    #[test]
+    fn media_backup_mode_defaults_full_and_persists() -> Result<()> {
+        let dir = tempdir()?;
+        let mut store = SettingsStore::load(dir.path())?;
+        assert_eq!(
+            store.settings().media_backup_mode,
+            MediaBackupMode::Full,
+            "backups default to carrying media"
+        );
+
+        assert!(store.set_media_backup_mode(MediaBackupMode::KeptOnly)?);
+        assert!(!store.set_media_backup_mode(MediaBackupMode::KeptOnly)?);
+
+        let loaded = load_settings(dir.path())?;
+        assert_eq!(loaded.media_backup_mode, MediaBackupMode::KeptOnly);
         Ok(())
     }
 

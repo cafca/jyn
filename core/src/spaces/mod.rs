@@ -1,11 +1,17 @@
 //! Group encryption for non-public posts, built on `p2panda-spaces`.
 //!
-//! Every profile owns a single-admin "friends space": the owner is the sole
-//! `Manage` member, accepted friends get `Write` access (which also makes
-//! them "secret members" of the encryption context, so they can read and
-//! comment). Non-public posts, and comments/hearts on them, are CBOR-encoded
-//! [`DomainOperation`]s encrypted to a space and carried as
-//! [`DomainOperation::Spaces`] wrappers on the author's `Spaces` log.
+//! Every profile owns two single-admin spaces: a "friends space" (accepted
+//! friends) and a "circles space" (friends plus the auto-derived
+//! friends-of-friends). The owner is the sole `Manage` member of both;
+//! members get `Write` access (which also makes them "secret members" of the
+//! encryption context, so they can read and comment). Non-public posts, and
+//! comments/hearts on them, are CBOR-encoded [`DomainOperation`]s encrypted
+//! to a space and carried as [`DomainOperation::Spaces`] wrappers on the
+//! author's `Spaces` log.
+//!
+//! Which of an owner's spaces is which is deliberately not visible on the
+//! wire (the audience tier stays blinded); members learn it from the posts
+//! they can decrypt — see [`JynSpaces::process_message`].
 //!
 //! See `docs/2026-07-05-post-encryption-spec.md` for the agreed design.
 
@@ -33,11 +39,31 @@ use p2panda_store::spaces::{SpacesMessage, SpacesStore};
 use p2panda_store::{SqliteStore, Transaction};
 use tracing::{debug, warn};
 
-use crate::domain::{ensure_spaces_tables, DomainExtensions, DomainOperation, JynOperationDomain};
+use crate::domain::{
+    ensure_spaces_tables, DomainExtensions, DomainOperation, JynOperationDomain, Visibility,
+};
 use forge::JynForge;
 pub use forge::SpacesOutbox;
 pub use store::spaces_args_from_operation;
 use store::JynSpacesStore;
+
+/// Which of a profile's encryption spaces an operation targets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpaceKind {
+    /// Accepted friends only.
+    Friends,
+    /// Friends plus the auto-derived friends-of-friends.
+    Circles,
+}
+
+impl SpaceKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Friends => "friends",
+            Self::Circles => "circles",
+        }
+    }
+}
 
 /// Matches the private `GLOBAL_GROUPS_CONTEXT_ID` inside `p2panda-spaces`;
 /// the auth CRDT state is stored under this key.
@@ -86,6 +112,7 @@ pub struct JynSpaces {
     outbox: SpacesOutbox,
     local_profile_id: String,
     my_space_id: SpaceId,
+    my_circles_space_id: SpaceId,
     pending: Arc<Mutex<Vec<PendingMessage>>>,
     /// Serializes all spaces operations. The manager's internal RwLock and
     /// the store's single sqlite connection interleave badly when several
@@ -118,6 +145,9 @@ impl JynSpaces {
         let space_seed = hkdf::<32>(b"jyn/friends-space/v1", seed, None)
             .map_err(|err| anyhow::anyhow!("failed to derive friends space id: {err}"))?;
         let my_space_id: SpaceId = Hash::digest(space_seed);
+        let circles_seed = hkdf::<32>(b"jyn/circles-space/v1", seed, None)
+            .map_err(|err| anyhow::anyhow!("failed to derive circles space id: {err}"))?;
+        let my_circles_space_id: SpaceId = Hash::digest(circles_seed);
 
         let domain = JynOperationDomain::new(store.clone());
         let spaces_store = JynSpacesStore::new(store);
@@ -138,6 +168,7 @@ impl JynSpaces {
             outbox,
             local_profile_id,
             my_space_id,
+            my_circles_space_id,
             pending: Arc::new(Mutex::new(Vec::new())),
             ops_lock: Arc::new(tokio::sync::Mutex::new(())),
         })
@@ -147,20 +178,23 @@ impl JynSpaces {
         self.my_space_id
     }
 
+    fn own_space_id(&self, kind: SpaceKind) -> SpaceId {
+        match kind {
+            SpaceKind::Friends => self.my_space_id,
+            SpaceKind::Circles => self.my_circles_space_id,
+        }
+    }
+
     /// Operations forged since the last drain; the caller pushes them into
     /// live gossip. They are already persisted and syncable regardless.
     pub fn drain_outbox(&self) -> Vec<Operation<DomainExtensions>> {
         std::mem::take(&mut self.outbox.lock().expect("spaces outbox lock poisoned"))
     }
 
-    /// Ensures our key bundle is published and the friends space exists.
+    /// Ensures our key bundle is published and both own spaces exist.
     /// Idempotent; call at startup and after key rotation windows.
     pub async fn ensure_ready(&self) -> Result<()> {
         let _guard = self.ops_lock.lock().await;
-        let has_space =
-            SpacesStore::<SpacesStoreState<()>>::has_space(&self.store, &self.my_space_id)
-                .await
-                .map_err(|err| anyhow::anyhow!("failed to check friends space: {err}"))?;
 
         let bundle_missing = self.meta_get("key_bundle_published").await?.is_none();
         let bundle_expired = self
@@ -179,12 +213,19 @@ impl JynSpaces {
             debug!("published spaces key bundle");
         }
 
-        if !has_space {
+        for kind in [SpaceKind::Friends, SpaceKind::Circles] {
+            let space_id = self.own_space_id(kind);
+            let has_space = SpacesStore::<SpacesStoreState<()>>::has_space(&self.store, &space_id)
+                .await
+                .map_err(|err| anyhow::anyhow!("failed to check own space: {err}"))?;
+            if has_space {
+                continue;
+            }
             let (groups_y, space_y, messages) = self
                 .manager
-                .create_space(self.my_space_id, &[])
+                .create_space(space_id, &[])
                 .await
-                .map_err(|err| anyhow::anyhow!("failed to create friends space: {err}"))?;
+                .map_err(|err| anyhow::anyhow!("failed to create own space: {err}"))?;
             self.persist_states(Some(&groups_y), Some(space_y)).await?;
             // Our own control messages must count as processed: the manager
             // already applied them via the direct call, and friends' later
@@ -192,9 +233,9 @@ impl JynSpaces {
             for message in &messages {
                 self.mark_processed(&message.id).await?;
             }
-            self.record_space_owner(&self.my_space_id, &self.local_profile_id)
+            self.record_space_owner(&space_id, &self.local_profile_id, Some(kind))
                 .await?;
-            debug!("created friends space");
+            debug!(kind = kind.as_str(), "created own encryption space");
         }
 
         Ok(())
@@ -209,11 +250,36 @@ impl JynSpaces {
         // friends' auth operations were processed first; mutating a stale
         // space corrupts (or panics) the resolver, so catch up first.
         self.repair_spaces().await?;
+        self.reconcile_space(self.my_space_id, friend_ids, true)
+            .await
+    }
+
+    /// Aligns circles-space membership with the derived friends-of-friends
+    /// set. Additions are always applied (cheap — the new member just gets
+    /// the current secret); removals re-key the space, so they only run with
+    /// `remove_stale` — the lazy re-key right before the next Circles post,
+    /// per the spec, bounding re-key frequency to publish frequency instead
+    /// of membership-churn frequency.
+    pub async fn reconcile_circles(&self, member_ids: &[String], remove_stale: bool) -> Result<()> {
+        let _guard = self.ops_lock.lock().await;
+        self.repair_spaces().await?;
+        self.reconcile_space(self.my_circles_space_id, member_ids, remove_stale)
+            .await
+    }
+
+    /// Adds/removes members of one of our own spaces to match `desired_ids`.
+    /// Called with `ops_lock` held and spaces repaired.
+    async fn reconcile_space(
+        &self,
+        space_id: SpaceId,
+        desired_ids: &[String],
+        remove_stale: bool,
+    ) -> Result<()> {
         let Some(space) = self
             .manager
-            .space(self.my_space_id)
+            .space(space_id)
             .await
-            .map_err(|err| anyhow::anyhow!("failed to load friends space: {err}"))?
+            .map_err(|err| anyhow::anyhow!("failed to load own space: {err}"))?
         else {
             return Ok(());
         };
@@ -226,16 +292,17 @@ impl JynSpaces {
             .iter()
             .map(|(member, _)| member.to_string())
             .collect();
-        let desired: HashSet<String> = friend_ids.iter().cloned().collect();
+        let desired: HashSet<String> = desired_ids.iter().cloned().collect();
         debug!(
             desired = desired.len(),
             members = member_ids.len(),
-            "reconciling friends space"
+            space_id = %space_id,
+            "reconciling own space"
         );
 
-        for friend_id in desired.difference(&member_ids) {
-            let Ok(actor) = friend_id.parse::<VerifyingKey>() else {
-                warn!(friend_id, "skipping friend with unparsable profile id");
+        for member_id in desired.difference(&member_ids) {
+            let Ok(actor) = member_id.parse::<VerifyingKey>() else {
+                warn!(member_id, "skipping member with unparsable profile id");
                 continue;
             };
             match space.add(actor, Access::write()).await {
@@ -243,15 +310,18 @@ impl JynSpaces {
                     self.persist_states(Some(&groups_y), Some(space_y)).await?;
                     self.mark_processed(&auth_msg.id).await?;
                     self.mark_processed(&space_msg.id).await?;
-                    debug!(friend_id, "added friend to friends space");
+                    debug!(member_id, "added member to own space");
                 }
                 Err(err) => {
                     // Most commonly: their key bundle has not arrived yet.
-                    debug!(friend_id, "cannot add friend to space yet: {err:?}");
+                    debug!(member_id, "cannot add member to space yet: {err:?}");
                 }
             }
         }
 
+        if !remove_stale {
+            return Ok(());
+        }
         for member_id in member_ids.difference(&desired) {
             if member_id == &self.local_profile_id {
                 continue;
@@ -264,7 +334,7 @@ impl JynSpaces {
                     self.persist_states(Some(&groups_y), Some(space_y)).await?;
                     self.mark_processed(&auth_msg.id).await?;
                     self.mark_processed(&space_msg.id).await?;
-                    debug!(member_id, "removed ex-friend from friends space");
+                    debug!(member_id, "removed ex-member from own space");
                 }
                 Err(err) => {
                     warn!(member_id, "failed to remove member from space: {err}");
@@ -275,27 +345,35 @@ impl JynSpaces {
         Ok(())
     }
 
-    /// Encrypts a domain operation to our own friends space.
-    pub async fn encrypt_local(&self, inner: &DomainOperation) -> Result<()> {
+    /// Encrypts a domain operation to one of our own spaces.
+    pub async fn encrypt_local(&self, kind: SpaceKind, inner: &DomainOperation) -> Result<()> {
         let _guard = self.ops_lock.lock().await;
         self.repair_spaces().await?;
-        self.encrypt_to_space(self.my_space_id, inner).await
+        self.encrypt_to_space(self.own_space_id(kind), inner).await
     }
 
-    /// Encrypts a domain operation to the friends space of another profile
-    /// (used for comments/hearts on their encrypted posts). Fails if we have
-    /// not been welcomed into their space.
+    /// Encrypts a domain operation to another profile's friends or circles
+    /// space (used for comments/hearts on their encrypted posts). Fails if we
+    /// have not been welcomed into that space — which space is which is only
+    /// learned from posts we could decrypt, so reacting to a post implies the
+    /// mapping is known.
     pub async fn encrypt_to_owner(
         &self,
         owner_profile_id: &str,
+        kind: SpaceKind,
         inner: &DomainOperation,
     ) -> Result<()> {
         let _guard = self.ops_lock.lock().await;
         self.repair_spaces().await?;
         let space_id = self
-            .space_of_owner(owner_profile_id)
+            .space_of_owner(owner_profile_id, kind)
             .await?
-            .with_context(|| format!("no known encryption space for profile {owner_profile_id}"))?;
+            .with_context(|| {
+                format!(
+                    "no known {} space for profile {owner_profile_id}",
+                    kind.as_str()
+                )
+            })?;
         self.encrypt_to_space(space_id, inner).await
     }
 
@@ -356,14 +434,28 @@ impl JynSpaces {
         self.drain_pending_inner().await
     }
 
-    /// Emits catch-up membership pointers for spaces whose local auth-graph
-    /// copy trails the shared graph. Called with `ops_lock` held.
+    /// Emits catch-up membership pointers for own spaces whose local
+    /// auth-graph copy trails its group's slice of the shared graph. Called
+    /// with `ops_lock` held.
+    ///
+    /// Only *our own* spaces are ever repaired. All operations of a
+    /// single-admin space arrive on its owner's sequential log, original
+    /// membership messages (with welcome payloads) included, so a member's
+    /// copy of a foreign space heals by itself. Repairing foreign spaces
+    /// would publish welcome-less pointers from our log which race the
+    /// owner's originals on other members — a member that processes our
+    /// pointer to their own add first parks forever waiting for a welcome.
     async fn repair_spaces(&self) -> Result<()> {
-        let in_need = self
+        let in_need: Vec<SpaceId> = self
             .manager
             .spaces_repair_required()
             .await
-            .map_err(|err| anyhow::anyhow!("failed to check spaces repair: {err}"))?;
+            .map_err(|err| anyhow::anyhow!("failed to check spaces repair: {err}"))?
+            .into_iter()
+            .filter(|space_id| {
+                *space_id == self.my_space_id || *space_id == self.my_circles_space_id
+            })
+            .collect();
         if in_need.is_empty() {
             return Ok(());
         }
@@ -378,13 +470,20 @@ impl JynSpaces {
             }
             Err(err) => return Err(anyhow::anyhow!("failed to repair spaces: {err}")),
         };
+        let mut repaired = 0;
         for (space_y, messages) in results {
+            if messages.is_empty() {
+                continue;
+            }
+            repaired += 1;
             self.persist_states(None, Some(space_y)).await?;
             for message in &messages {
                 self.mark_processed(&message.id).await?;
             }
         }
-        debug!(spaces = in_need.len(), "repaired trailing spaces");
+        if repaired > 0 {
+            debug!(spaces = repaired, "repaired trailing spaces");
+        }
         Ok(())
     }
 
@@ -392,6 +491,13 @@ impl JynSpaces {
         let mut report = IngestReport::default();
 
         loop {
+            // Space copies must be caught up with the shared auth graph
+            // before membership messages process: with two spaces per owner
+            // the auth operations chain across both, and resolving a message
+            // against a trailing copy panics the upstream resolver.
+            if let Err(err) = self.repair_spaces().await {
+                warn!("spaces repair before processing failed: {err:#}");
+            }
             let ready: Vec<JynSpacesMessage> = {
                 let mut candidates = Vec::new();
                 let pending = self.pending.lock().expect("spaces pending lock poisoned");
@@ -478,17 +584,21 @@ impl JynSpaces {
         if let SpacesArgs::SpaceMembership { space_id, .. } = &message.args {
             // Single-admin spaces: membership messages are always authored by
             // the space owner, which is how members learn whose space it is.
-            self.record_space_owner(space_id, &author_profile_id)
+            // Which *kind* of space stays unknown (the tier is blinded on the
+            // wire) until one of the owner's posts decrypts below.
+            self.record_space_owner(space_id, &author_profile_id, None)
                 .await?;
         }
 
         for event in events {
             match event {
-                Event::Application { data, .. } => {
+                Event::Application { space_id, data } => {
                     match decode_cbor::<DomainOperation, _>(&data[..]) {
                         Ok(inner) if !matches!(inner, DomainOperation::Spaces { .. }) => {
                             self.domain
                                 .store_decrypted_inner_operation(&message.id, &inner)
+                                .await?;
+                            self.learn_space_kind(&space_id, &author_profile_id, &inner)
                                 .await?;
                             report.changed_profiles.insert(author_profile_id.clone());
                         }
@@ -556,15 +666,22 @@ impl JynSpaces {
         self.drain_pending_inner().await
     }
 
-    /// The encryption space owned by a profile, learned from processed
-    /// membership messages (or our own, which is registered at creation).
-    pub async fn space_of_owner(&self, owner_profile_id: &str) -> Result<Option<SpaceId>> {
-        let row: Option<(String,)> =
-            sqlx::query_as("SELECT space_id FROM jyn_spaces_owner WHERE owner_profile_id = ?")
-                .bind(owner_profile_id)
-                .fetch_optional(self.store.store().pool())
-                .await
-                .context("failed to read space owner")?;
+    /// The friends or circles space owned by a profile. Ownership is learned
+    /// from processed membership messages; the *kind* only from the owner's
+    /// posts we could decrypt (or at creation for our own spaces).
+    pub async fn space_of_owner(
+        &self,
+        owner_profile_id: &str,
+        kind: SpaceKind,
+    ) -> Result<Option<SpaceId>> {
+        let row: Option<(String,)> = sqlx::query_as(
+            "SELECT space_id FROM jyn_spaces_owner WHERE owner_profile_id = ? AND kind = ?",
+        )
+        .bind(owner_profile_id)
+        .bind(kind.as_str())
+        .fetch_optional(self.store.store().pool())
+        .await
+        .context("failed to read space owner")?;
         row.map(|(space_id,)| {
             space_id
                 .parse::<Hash>()
@@ -573,16 +690,79 @@ impl JynSpaces {
         .transpose()
     }
 
-    async fn record_space_owner(&self, space_id: &SpaceId, owner_profile_id: &str) -> Result<()> {
+    async fn owner_of_space(&self, space_id: &SpaceId) -> Result<Option<String>> {
+        let row: Option<(String,)> =
+            sqlx::query_as("SELECT owner_profile_id FROM jyn_spaces_owner WHERE space_id = ?")
+                .bind(space_id.to_string())
+                .fetch_optional(self.store.store().pool())
+                .await
+                .context("failed to read space owner")?;
+        Ok(row.map(|(owner,)| owner))
+    }
+
+    async fn record_space_owner(
+        &self,
+        space_id: &SpaceId,
+        owner_profile_id: &str,
+        kind: Option<SpaceKind>,
+    ) -> Result<()> {
         sqlx::query(
-            "INSERT OR IGNORE INTO jyn_spaces_owner (space_id, owner_profile_id) VALUES (?, ?)",
+            "INSERT OR IGNORE INTO jyn_spaces_owner (space_id, owner_profile_id, kind) VALUES (?, ?, ?)",
         )
         .bind(space_id.to_string())
         .bind(owner_profile_id)
+        .bind(kind.map(SpaceKind::as_str))
         .execute(self.store.store().pool())
         .await
         .context("failed to record space owner")?;
+        if let Some(kind) = kind {
+            self.set_space_kind(space_id, kind).await?;
+        }
         Ok(())
+    }
+
+    /// Records which kind of space this is, once. A kind never flips: the
+    /// first decrypted post of the owner settles it.
+    async fn set_space_kind(&self, space_id: &SpaceId, kind: SpaceKind) -> Result<()> {
+        sqlx::query("UPDATE jyn_spaces_owner SET kind = ? WHERE space_id = ? AND kind IS NULL")
+            .bind(kind.as_str())
+            .bind(space_id.to_string())
+            .execute(self.store.store().pool())
+            .await
+            .context("failed to record space kind")?;
+        Ok(())
+    }
+
+    /// Learns whether a space is its owner's friends or circles space from a
+    /// decrypted post. Only the space owner's own posts are trusted for the
+    /// mapping — any Write member can publish into a space, so a member's
+    /// payload must not classify someone else's space.
+    async fn learn_space_kind(
+        &self,
+        space_id: &SpaceId,
+        author_profile_id: &str,
+        inner: &DomainOperation,
+    ) -> Result<()> {
+        let DomainOperation::PostPublished {
+            profile_id: post_author,
+            visibility,
+            ..
+        } = inner
+        else {
+            return Ok(());
+        };
+        if post_author != author_profile_id
+            || self.owner_of_space(space_id).await?.as_deref() != Some(author_profile_id)
+        {
+            return Ok(());
+        }
+        let kind = match visibility {
+            Visibility::Friends => SpaceKind::Friends,
+            Visibility::Circles => SpaceKind::Circles,
+            // Public and Private posts never travel encrypted.
+            Visibility::Public | Visibility::Private => return Ok(()),
+        };
+        self.set_space_kind(space_id, kind).await
     }
 
     async fn is_processed(&self, id: &Hash) -> Result<bool> {

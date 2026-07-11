@@ -6,4 +6,17 @@
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
+/// How much media a backup archive carries. Expired posts' blobs are never
+/// included in any mode — backing them up would undo their ephemerality.
+enum MediaBackupMode {
+  /// Blobs of all live posts (own, private, friends') plus keeps.
+  full,
+
+  /// Only keeps and private posts — media that no peer can re-serve.
+  keptOnly,
+
+  /// No blob bytes; media re-fetches from peers after a restore.
+  metadataOnly,
+}
+
 enum RelayMode { testingRelay, relay, disabled }

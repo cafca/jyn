@@ -34,7 +34,7 @@ use crate::domain::{
 };
 use crate::node::AppNode;
 use crate::profile::load_private_key_from_data_dir;
-use crate::spaces::JynSpaces;
+use crate::spaces::{JynSpaces, SpaceKind};
 
 const DOMAIN_DB_FILE: &str = "domain.sqlite3";
 const CONTACT_BOOTSTRAP_SETTLE_MILLIS: u64 = 750;
@@ -214,32 +214,48 @@ impl JynSyncService {
         self.domain.read_profile_state(profile_id).await
     }
 
-    /// Encrypts a domain operation to our own friends space and pushes the
+    /// Encrypts a domain operation to one of our own spaces and pushes the
     /// resulting wrapper operations into live sync.
-    pub(crate) async fn publish_encrypted(&mut self, operation: DomainOperation) -> Result<()> {
-        self.spaces.encrypt_local(&operation).await?;
+    ///
+    /// A Circles publish first fully reconciles circles membership including
+    /// removals — the spec's lazy re-key: dropped friends-of-friends only
+    /// cost a re-key when there is actually something new to protect.
+    pub(crate) async fn publish_encrypted(
+        &mut self,
+        operation: DomainOperation,
+        kind: SpaceKind,
+    ) -> Result<()> {
+        if kind == SpaceKind::Circles {
+            let members = derive_circle_members(&self.domain, &self.local_profile_id).await?;
+            self.spaces.reconcile_circles(&members, true).await?;
+        }
+        self.spaces.encrypt_local(kind, &operation).await?;
         self.flush_spaces_outbox();
         self.emit_local_state().await;
         Ok(())
     }
 
-    /// Encrypts a domain operation (comment/heart) to the friends space of
-    /// the given profile. Fails if we have not been welcomed there yet.
+    /// Encrypts a domain operation (comment/heart) to the friends or circles
+    /// space of the given profile. Fails if we have not been welcomed there.
     pub(crate) async fn publish_encrypted_to_owner(
         &mut self,
         owner_profile_id: &str,
         operation: DomainOperation,
+        kind: SpaceKind,
     ) -> Result<()> {
         self.spaces
-            .encrypt_to_owner(owner_profile_id, &operation)
+            .encrypt_to_owner(owner_profile_id, kind, &operation)
             .await?;
         self.flush_spaces_outbox();
         self.emit_local_state().await;
         Ok(())
     }
 
-    /// Aligns friends-space membership with the current accepted-friends
-    /// list, then pushes any forged control messages into live sync.
+    /// Aligns encryption-space membership with the current social graph:
+    /// friends space with the accepted-friends list (removals re-key
+    /// eagerly), circles space with friends ∪ friends-of-friends (additions
+    /// only — removals wait for the next Circles post). Also joins the
+    /// topics of new circle members, so their key bundles and posts flow.
     /// Idempotent and cheap when nothing changed.
     pub(crate) async fn reconcile_spaces(&mut self) -> Result<()> {
         let friends = self
@@ -248,7 +264,43 @@ impl JynSyncService {
             .map(|state| state.followed_profile_ids)
             .unwrap_or_default();
         self.spaces.reconcile_friends(&friends).await?;
+        let members = derive_circle_members(&self.domain, &self.local_profile_id).await?;
+        self.spaces.reconcile_circles(&members, false).await?;
         self.flush_spaces_outbox();
+
+        for member in members {
+            if friends.contains(&member) || self.contact_streams.contains_key(&member) {
+                continue;
+            }
+            if let Err(err) = self.sync_contact_profile(&member).await {
+                tracing::debug!("failed to start sync with circle member {member}: {err:#}");
+            }
+        }
+        Ok(())
+    }
+
+    /// Loads unprocessed spaces operations of every known profile (own,
+    /// friends, friends-of-friends) into the manager. Needed after a restart:
+    /// the pending queue is in-memory, and already-stored operations are
+    /// never redelivered by sync.
+    pub(crate) async fn process_spaces_backlog(&mut self) -> Result<()> {
+        let mut profiles = vec![self.local_profile_id.clone()];
+        if let Some(own) = self.read_profile_state(&self.local_profile_id).await? {
+            let members = derive_circle_members(&self.domain, &self.local_profile_id).await?;
+            profiles.extend(own.followed_profile_ids);
+            profiles.extend(members);
+            profiles.sort();
+            profiles.dedup();
+        }
+        let report = self.spaces.process_backlog(&profiles).await?;
+        self.flush_spaces_outbox();
+        for changed in &report.changed_profiles {
+            let is_local = changed == &self.local_profile_id;
+            emit_topic_state(&self.domain, changed, &self.event_tx, is_local).await;
+        }
+        if !report.new_key_bundles.is_empty() {
+            self.reconcile_spaces().await?;
+        }
         Ok(())
     }
 
@@ -438,6 +490,35 @@ impl JynSyncService {
     }
 }
 
+/// The auto-derived circles audience: accepted friends plus every friend's
+/// friends, as read from their replicated (mandatorily visible) follow lists.
+/// Never includes the local profile itself.
+async fn derive_circle_members(
+    domain: &JynOperationDomain,
+    local_profile_id: &str,
+) -> Result<Vec<String>> {
+    let Some(own) = domain.read_profile_state(local_profile_id).await? else {
+        return Ok(Vec::new());
+    };
+    let mut members: std::collections::HashSet<String> =
+        own.followed_profile_ids.iter().cloned().collect();
+    for friend_id in &own.followed_profile_ids {
+        match domain.read_profile_state(friend_id).await {
+            Ok(Some(friend_state)) => {
+                members.extend(friend_state.followed_profile_ids.iter().cloned());
+            }
+            Ok(None) => {}
+            Err(err) => {
+                tracing::warn!("failed to read friend state for circle derivation: {err:#}");
+            }
+        }
+    }
+    members.remove(local_profile_id);
+    let mut members: Vec<String> = members.into_iter().collect();
+    members.sort();
+    Ok(members)
+}
+
 async fn open_domain_store(data_dir: &Path) -> Result<DomainStore> {
     std::fs::create_dir_all(data_dir).with_context(|| {
         format!(
@@ -499,6 +580,18 @@ fn spawn_topic_task(
                 };
                 if let Err(err) = spaces.reconcile_friends(&friends).await {
                     tracing::warn!("spaces reconcile failed: {err:#}");
+                }
+                match derive_circle_members(domain, local_profile_id).await {
+                    Ok(members) => {
+                        // Additions only; removals re-key and wait for the
+                        // next Circles post.
+                        if let Err(err) = spaces.reconcile_circles(&members, false).await {
+                            tracing::warn!("circles reconcile failed: {err:#}");
+                        }
+                    }
+                    Err(err) => {
+                        tracing::warn!("failed to derive circle members: {err:#}");
+                    }
                 }
                 for operation in spaces.drain_outbox() {
                     if let Err(err) = local_handle.publish(operation) {
@@ -680,15 +773,18 @@ mod tests {
             // A friends post goes through the encrypted path; the reduced
             // state below only sees it if encrypt → decrypt-substitution →
             // reduction all work.
-            sync.publish_encrypted(DomainOperation::PostPublished {
-                profile_id: profile_id.clone(),
-                post_id: "post-1".into(),
-                body: "hello river".into(),
-                media: Vec::new(),
-                visibility: Visibility::Friends,
-                expires_at: None,
-                created_at: 10,
-            })
+            sync.publish_encrypted(
+                DomainOperation::PostPublished {
+                    profile_id: profile_id.clone(),
+                    post_id: "post-1".into(),
+                    body: "hello river".into(),
+                    media: Vec::new(),
+                    visibility: Visibility::Friends,
+                    expires_at: None,
+                    created_at: 10,
+                },
+                SpaceKind::Friends,
+            )
             .await?;
 
             // Publishing reflects the new state back as an event.
@@ -738,15 +834,18 @@ mod tests {
         let archive = dir.path().join("jyn.backup");
         {
             let mut sync = JynSyncService::new(&node, profile_id.clone(), event_tx.clone()).await?;
-            sync.publish_encrypted(DomainOperation::PostPublished {
-                profile_id: profile_id.clone(),
-                post_id: "post-1".into(),
-                body: "sealed memories".into(),
-                media: Vec::new(),
-                visibility: Visibility::Friends,
-                expires_at: None,
-                created_at: 10,
-            })
+            sync.publish_encrypted(
+                DomainOperation::PostPublished {
+                    profile_id: profile_id.clone(),
+                    post_id: "post-1".into(),
+                    body: "sealed memories".into(),
+                    media: Vec::new(),
+                    visibility: Visibility::Friends,
+                    expires_at: None,
+                    created_at: 10,
+                },
+                SpaceKind::Friends,
+            )
             .await?;
 
             let snapshot = dir.path().join("domain-snapshot.sqlite3");

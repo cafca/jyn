@@ -20,6 +20,7 @@ use crate::local_stores::{KeepsStore, OutgoingRequestsStore, PrivatePostsStore};
 use crate::node::{AppNode, NodeOptions};
 use crate::profile::{now_unix_secs, ProfileStore, UserProfile};
 use crate::settings::load_settings;
+use crate::spaces::SpaceKind;
 use crate::sync::JynSyncService;
 
 type BoxFuture<T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'static>>;
@@ -523,7 +524,22 @@ fn spawn_sync_maintenance(
             {
                 let sync_guard = sync.lock().await;
                 if let Ok(Some(own)) = sync_guard.read_profile_state(&local_profile_id).await {
-                    for profile_id in own.followed_profile_ids {
+                    // Friends we never heard from, plus circle members
+                    // (friends-of-friends) whose bundles and posts we still
+                    // need — their friend named them, but their own topic has
+                    // not answered yet.
+                    let mut watched = own.followed_profile_ids.clone();
+                    for friend_id in &own.followed_profile_ids {
+                        if let Ok(Some(friend_state)) =
+                            sync_guard.read_profile_state(friend_id).await
+                        {
+                            watched.extend(friend_state.followed_profile_ids);
+                        }
+                    }
+                    for profile_id in watched {
+                        if profile_id == local_profile_id {
+                            continue;
+                        }
                         let heard_from = sync_guard
                             .has_operations_from(&profile_id)
                             .await
@@ -685,6 +701,15 @@ async fn post_visibility(
     }))
 }
 
+/// The encryption space a post of this visibility lives in. Callers handle
+/// `Public` (plaintext) and `Private` (local-only) before asking.
+fn space_kind_for(visibility: Visibility) -> SpaceKind {
+    match visibility {
+        Visibility::Circles => SpaceKind::Circles,
+        _ => SpaceKind::Friends,
+    }
+}
+
 /// Routes a heart/comment either to plaintext sync (public target post) or
 /// into the post author's encryption space (non-public target post), so the
 /// interaction is visible to exactly the audience that can see the post.
@@ -701,8 +726,12 @@ async fn publish_interaction(
     if visibility == Visibility::Public {
         sync.publish(operation).await
     } else {
-        sync.publish_encrypted_to_owner(post_author_profile_id, operation)
-            .await
+        sync.publish_encrypted_to_owner(
+            post_author_profile_id,
+            operation,
+            space_kind_for(visibility),
+        )
+        .await
     }
 }
 
@@ -728,13 +757,20 @@ async fn unpin_and_prune_prefix(state: &RuntimeState, prefix: &str) {
 }
 
 /// Writes an encrypted snapshot of the identity-critical stores to
-/// `dest_path`. Blob bytes are not included yet (spec phase 2); media
-/// re-fetches from peers after a restore. Restore itself happens before the
-/// node starts, via `crate::backup::restore_backup`.
+/// `dest_path`, plus blob bytes per the media-backup setting. Restore itself
+/// happens before the node starts, via `crate::backup::restore_backup`; the
+/// staged blobs re-import on the next start (`import_restored_blobs`).
 async fn export_backup(state: &RuntimeState, dest_path: String) -> Result<()> {
     let private_key = crate::profile::load_private_key_from_data_dir(&state.node.data_dir)?;
     let staging = tempfile::tempdir().context("failed to create backup staging dir")?;
     let mut files: Vec<(String, Vec<u8>)> = Vec::new();
+
+    // Collect blob candidates before the sqlite snapshots: reading the
+    // profile-data store from this task right after its `VACUUM INTO` starves
+    // the single-connection pool until the acquire times out (the release
+    // races the helper-thread acquire across runtimes).
+    let mode = load_settings(&state.node.data_dir)?.media_backup_mode;
+    let blob_hashes = backup_blob_hashes(state, mode).await?;
 
     let domain_snapshot = staging.path().join("domain.sqlite3");
     {
@@ -754,7 +790,158 @@ async fn export_backup(state: &RuntimeState, dest_path: String) -> Result<()> {
     ));
 
     files.extend(crate::backup::collect_plain_files(&state.node.data_dir));
+
+    for blob_hash in blob_hashes {
+        let Ok(hash) = blob_hash.parse::<p2panda_blobs::Hash>() else {
+            continue;
+        };
+        // Skip blobs we don't hold locally (e.g. a friend's photo we never
+        // viewed) — they re-fetch from peers after a restore.
+        if !state.node.blobs.has(hash).await.unwrap_or(false) {
+            continue;
+        }
+        match state.node.blobs.get_bytes(hash).await {
+            Ok(bytes) => files.push((
+                format!("{}{blob_hash}", crate::backup::BLOB_ENTRY_PREFIX),
+                bytes.to_vec(),
+            )),
+            Err(err) => tracing::warn!("skipping blob {blob_hash} in backup: {err}"),
+        }
+    }
+
     crate::backup::write_archive(&private_key, files, std::path::Path::new(&dest_path))
+}
+
+/// The blob hashes a backup should carry under the given mode. Expired and
+/// tombstoned posts never contribute — their bytes are meant to leave the
+/// world, and a backup must not smuggle them back in.
+async fn backup_blob_hashes(
+    state: &RuntimeState,
+    mode: crate::settings::MediaBackupMode,
+) -> Result<Vec<String>> {
+    use crate::settings::MediaBackupMode;
+
+    if mode == MediaBackupMode::MetadataOnly {
+        return Ok(Vec::new());
+    }
+    let now = now_unix_secs();
+    let mut hashes = std::collections::BTreeSet::new();
+    let mut collect = |posts: &[ReducedPost]| {
+        for post in posts {
+            if post.is_expired(now) {
+                continue;
+            }
+            for attachment in &post.media {
+                hashes.insert(attachment.blob_hash.clone());
+            }
+        }
+    };
+
+    // Keeps and private posts in every blob-carrying mode: nothing on the
+    // network can re-serve them, so losing them is permanent.
+    let kept: Vec<ReducedPost> = state
+        .keeps
+        .list()
+        .context("keeps for backup")?
+        .into_iter()
+        .map(|keep| keep.snapshot)
+        .collect();
+    collect(&kept);
+    collect(&state.private_posts.list().context("private for backup")?);
+
+    if mode == MediaBackupMode::Full {
+        let sync = state.sync.lock().await;
+        if let Some(own) = sync.read_profile_state(&state.local_profile_id).await? {
+            collect(&own.posts);
+            for contact_id in &own.followed_profile_ids {
+                if let Some(contact) = sync.read_profile_state(contact_id).await? {
+                    collect(&contact.posts);
+                }
+            }
+        }
+    }
+
+    Ok(hashes.into_iter().collect())
+}
+
+/// Imports blobs staged by a restore into the blob store, re-pinning them
+/// from the restored records: own and private posts pin under `feed/…`,
+/// keeps under `keep/…`. Blobs justified by neither (a friend's media held
+/// at export time) import bare — resident like any downloaded blob, GC-able
+/// once nothing references them. Runs once; the staging dir is removed.
+async fn import_restored_blobs(state: &RuntimeState) -> Result<()> {
+    let staging = state.node.data_dir.join(crate::backup::RESTORED_BLOBS_DIR);
+    if !staging.is_dir() {
+        return Ok(());
+    }
+
+    // Pin names by blob hash, reconstructed the way the original import and
+    // keep paths would have pinned them.
+    let mut pins_by_hash: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+    {
+        let sync = state.sync.lock().await;
+        if let Some(own) = sync.read_profile_state(&state.local_profile_id).await? {
+            for post in &own.posts {
+                for attachment in &post.media {
+                    pins_by_hash
+                        .entry(attachment.blob_hash.clone())
+                        .or_default()
+                        .push(format!("feed/{}/{}", post.post_id, attachment.blob_hash));
+                }
+            }
+        }
+    }
+    for post in state.private_posts.list()? {
+        for attachment in &post.media {
+            pins_by_hash
+                .entry(attachment.blob_hash.clone())
+                .or_default()
+                .push(format!("feed/{}/{}", post.post_id, attachment.blob_hash));
+        }
+    }
+    for keep in state.keeps.list()? {
+        for attachment in &keep.snapshot.media {
+            pins_by_hash
+                .entry(attachment.blob_hash.clone())
+                .or_default()
+                .push(format!(
+                    "keep/{}/{}/{}",
+                    keep.author_profile_id, keep.post_id, attachment.blob_hash
+                ));
+        }
+    }
+
+    let entries =
+        std::fs::read_dir(&staging).context("failed to read restored-blobs staging dir")?;
+    for entry in entries {
+        let Ok(entry) = entry else { continue };
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let temp_tag = match state.node.blobs.add_path(&path).temp_tag().await {
+            Ok(tag) => tag,
+            Err(err) => {
+                tracing::warn!("failed to import restored blob {name}: {err}");
+                continue;
+            }
+        };
+        let hash = temp_tag.hash();
+        if hash.to_string() != name {
+            tracing::warn!("restored blob {name} hashes to {hash}; dropping the mismatched bytes");
+            drop(temp_tag);
+            continue;
+        }
+        for pin in pins_by_hash.get(&name).into_iter().flatten() {
+            if let Err(err) = state.node.blobs.pins().set(pin.clone(), hash).await {
+                tracing::warn!("failed to pin restored blob {name} as {pin}: {err}");
+            }
+        }
+        drop(temp_tag);
+    }
+
+    std::fs::remove_dir_all(&staging).context("failed to clear restored-blobs staging dir")?;
+    tracing::info!("imported restored blobs into the blob store");
+    Ok(())
 }
 
 /// Finds the per-blob decryption secret for a blob hash by scanning every
@@ -1038,6 +1225,13 @@ async fn remove_friend(state: &RuntimeState, profile_id: String) -> Result<()> {
 }
 
 async fn follow_back(state: &RuntimeState, profile_id: String) -> Result<()> {
+    // Follow-back completes a friendship *we* initiated. Without this guard,
+    // any synced non-friend (circle members' topics sync too) could follow
+    // us and be auto-befriended — gaining friends-space access unconsented.
+    if !state.outgoing_requests.list()?.contains(&profile_id) {
+        tracing::debug!("ignoring follow-back for {profile_id}: no outstanding request");
+        return Ok(());
+    }
     let mut sync = state.sync.lock().await;
     sync.publish(DomainOperation::ContactFollowChanged {
         profile_id: state.local_profile_id.clone(),
@@ -1053,6 +1247,12 @@ async fn follow_back(state: &RuntimeState, profile_id: String) -> Result<()> {
 }
 
 async fn recover_startup(state: &RuntimeState, event_tx: &Sender<NetworkEvent>) -> Result<()> {
+    // Blobs staged by a restore enter the blob store first, so restored
+    // posts' media is servable without any peer round-trip.
+    if let Err(err) = import_restored_blobs(state).await {
+        tracing::warn!("failed to import restored blobs: {err:#}");
+    }
+
     // Profile first: onboarding state and composer defaults.
     let profile = state.profile.lock().await.profile().clone();
     event_tx
@@ -1086,6 +1286,15 @@ async fn recover_startup(state: &RuntimeState, event_tx: &Sender<NetworkEvent>) 
         if let Err(err) = sync.sync_contact_profile(&profile_id).await {
             tracing::warn!("failed to resume sync with {profile_id}: {err:#}");
         }
+    }
+    // Spaces messages that arrived but were not yet processed when the app
+    // last closed (the pending queue is in-memory), then membership catch-up
+    // — which also joins circle members' (friends-of-friends) topics.
+    if let Err(err) = sync.process_spaces_backlog().await {
+        tracing::warn!("failed to process spaces backlog: {err:#}");
+    }
+    if let Err(err) = sync.reconcile_spaces().await {
+        tracing::warn!("failed to reconcile spaces at startup: {err:#}");
     }
     drop(sync);
 
@@ -1162,9 +1371,11 @@ async fn publish_post(
     if draft.visibility == Visibility::Public {
         sync.publish(operation).await
     } else {
-        // Friends and (until they exist separately) Circles posts encrypt to
-        // the friends space; only members can read them.
-        sync.publish_encrypted(operation).await
+        // Friends posts encrypt to the friends space, Circles posts to the
+        // circles space (friends ∪ friends-of-friends); only members read
+        // them. A Circles publish lazily re-keys the space first.
+        sync.publish_encrypted(operation, space_kind_for(draft.visibility))
+            .await
     }
 }
 
@@ -1329,7 +1540,8 @@ async fn edit_post(
     if visibility == Visibility::Public {
         sync.publish(operation).await
     } else {
-        sync.publish_encrypted(operation).await
+        sync.publish_encrypted(operation, space_kind_for(visibility))
+            .await
     }
 }
 
@@ -1360,7 +1572,8 @@ async fn delete_post(
     if visibility == Visibility::Public {
         sync.publish(operation).await?;
     } else {
-        sync.publish_encrypted(operation).await?;
+        sync.publish_encrypted(operation, space_kind_for(visibility))
+            .await?;
     }
     drop(sync);
     unpin_and_prune_prefix(state, &format!("feed/{post_id}/")).await;
@@ -1395,7 +1608,8 @@ async fn set_post_lifetime(
     if visibility == Visibility::Public {
         sync.publish(operation).await
     } else {
-        sync.publish_encrypted(operation).await
+        sync.publish_encrypted(operation, space_kind_for(visibility))
+            .await
     }
 }
 

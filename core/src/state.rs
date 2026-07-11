@@ -151,6 +151,26 @@ impl RiverState {
             .as_ref()
             .map(|own| own.followed_profile_ids.clone())
             .unwrap_or_default();
+        // Circle members (friends-of-friends): their circles posts decrypt
+        // for us when they added us to their circle, and those posts belong
+        // in the river even though we don't follow them. Friends-only posts
+        // of theirs never decrypt, so nothing over-broad can leak through.
+        let my_id = self
+            .own
+            .as_ref()
+            .map(|own| own.profile_id.clone())
+            .unwrap_or_default();
+        let circle_authors: std::collections::HashSet<String> = self
+            .by_friend
+            .values()
+            .filter(|state| followed.contains(&state.profile_id))
+            .flat_map(|state| state.followed_profile_ids.iter().cloned())
+            .filter(|profile_id| !followed.contains(profile_id) && *profile_id != my_id)
+            .collect();
+        let visible_author = |profile_id: &str| {
+            followed.iter().any(|followed| followed == profile_id)
+                || circle_authors.contains(profile_id)
+        };
         let own_name = self
             .own
             .as_ref()
@@ -200,7 +220,7 @@ impl RiverState {
                 index_interactions(own, &own_name, true);
             }
             for state in self.by_friend.values() {
-                if !followed.contains(&state.profile_id) {
+                if !visible_author(&state.profile_id) {
                     continue;
                 }
                 let name = state
@@ -260,11 +280,12 @@ impl RiverState {
             );
         }
 
-        // Only friends we follow flow into the river: a synced-but-unaccepted
-        // topic (someone we merely requested) or an unfriended profile's
-        // lingering state contributes nothing.
+        // Friends we follow and circle members flow into the river; a
+        // synced-but-unaccepted topic (someone we merely requested) or an
+        // unfriended, out-of-circle profile's lingering state contributes
+        // nothing.
         for state in self.by_friend.values() {
-            if !followed.contains(&state.profile_id) {
+            if !visible_author(&state.profile_id) {
                 continue;
             }
             let name = state
@@ -423,5 +444,37 @@ mod tests {
         assert_eq!(ids, vec!["private-1", "own-1"]);
         // Nothing left to expire.
         assert!(!river.expiry_due(u64::MAX));
+    }
+
+    #[test]
+    fn circle_members_posts_flow_into_the_river() {
+        let mut river = RiverState::default();
+        river.set_own_display_name("Me");
+        let mut own = state_with_posts("me", Vec::new());
+        own.followed_profile_ids = vec!["anna".into()];
+        river.apply_local_state(own);
+
+        // Anna (a friend) follows Carol — Carol is in our circle. Whatever of
+        // Carol's stream we could decrypt (her circles posts) is visible.
+        let mut anna = state_with_posts("anna", Vec::new());
+        anna.followed_profile_ids = vec!["me".into(), "carol".into()];
+        river.apply_contact_state("anna".into(), anna);
+        river.apply_contact_state(
+            "carol".into(),
+            state_with_posts("carol", vec![post("carol-1", 20, None)]),
+        );
+        // A synced profile nobody's follow list names stays out.
+        river.apply_contact_state(
+            "stranger".into(),
+            state_with_posts("stranger", vec![post("stranger-1", 30, None)]),
+        );
+
+        river.materialize(45);
+        let ids: Vec<_> = river
+            .river
+            .iter()
+            .map(|p| p.post.post_id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["carol-1"]);
     }
 }

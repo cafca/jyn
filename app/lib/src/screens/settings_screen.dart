@@ -10,6 +10,21 @@ import '../theme/chrome.dart';
 import '../theme/tokens.dart';
 import 'diagnostics_screen.dart';
 
+const _mediaBackupLabels = {
+  MediaBackupMode.full: (
+    'all media',
+    'photos, audio and video of live and kept posts',
+  ),
+  MediaBackupMode.keptOnly: (
+    'kept and private only',
+    'media no one else could re-serve after a restore',
+  ),
+  MediaBackupMode.metadataOnly: (
+    'no media',
+    'posts and keys only; media re-fetches from friends',
+  ),
+};
+
 /// Node settings. Relay and mDNS changes persist immediately and take
 /// effect on the next app start.
 class SettingsScreen extends StatefulWidget {
@@ -238,6 +253,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         'restores with the recovery phrase',
                       ),
                       onTap: _exportBackup,
+                    ),
+                    RadioGroup<MediaBackupMode>(
+                      groupValue: settings.mediaBackupMode,
+                      onChanged: (mode) {
+                        if (mode == null) return;
+                        _apply(() => rust.setMediaBackupMode(mode: mode));
+                      },
+                      child: Column(
+                        children: [
+                          for (final MapEntry(key: mode, value: (label, hint))
+                              in _mediaBackupLabels.entries)
+                            RadioListTile<MediaBackupMode>(
+                              title: Text('media in backup: $label'),
+                              subtitle: Text(hint),
+                              value: mode,
+                              dense: true,
+                            ),
+                        ],
+                      ),
                     ),
                     const Divider(height: 32),
                     // Diagnostics moved off the top-level toolbar; it lives
