@@ -231,7 +231,10 @@ mod tests {
 
         assert_eq!(fs::read(restored.join("node.key"))?, key.as_bytes());
         assert_eq!(fs::read(restored.join("domain.sqlite3"))?, b"domain");
-        assert_eq!(fs::read(restored.join("profile-store.sqlite3"))?, b"profile");
+        assert_eq!(
+            fs::read(restored.join("profile-store.sqlite3"))?,
+            b"profile"
+        );
         assert_eq!(
             fs::read_to_string(restored.join("schema.version"))?.trim(),
             DATA_SCHEMA_VERSION.to_string()

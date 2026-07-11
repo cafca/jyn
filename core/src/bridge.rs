@@ -1199,9 +1199,8 @@ async fn import_attachments(
             );
         }
         let (import_path, blob_secret, _ciphertext_guard) = if encrypt {
-            let plaintext = std::fs::read(&media.path).with_context(|| {
-                format!("failed to read attachment {}", media.path.display())
-            })?;
+            let plaintext = std::fs::read(&media.path)
+                .with_context(|| format!("failed to read attachment {}", media.path.display()))?;
             let (ciphertext, secret) = crate::media::blob_crypto::encrypt_blob(&plaintext)?;
             let sealed = tempfile::NamedTempFile::new()
                 .context("failed to create sealed attachment file")?;

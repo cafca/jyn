@@ -109,9 +109,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
       () => commands.exportBackup(destPath: location.path),
     );
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('backup written')),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('backup written')));
   }
 
   @override

@@ -4,10 +4,11 @@
 //! [`SpacesMessageStore`] is jyn-specific because spaces messages travel
 //! inside `DomainOperation::Spaces` bodies instead of header extensions.
 
+use p2panda_auth::group::GroupCrdtState;
 use p2panda_auth::traits::Conditions;
+use p2panda_auth::traits::Operation as AuthOperation;
 use p2panda_core::cbor::decode_cbor;
 use p2panda_core::{Extensions, Hash, Operation, VerifyingKey};
-use p2panda_auth::group::GroupCrdtState;
 use p2panda_encryption::key_manager::PreKeyBundlesState;
 use p2panda_encryption::key_registry::KeyRegistryState;
 use p2panda_spaces::SpacesArgs;
@@ -15,11 +16,8 @@ use p2panda_store::groups::GroupsStore;
 use p2panda_store::key_registry::KeyRegistryStore;
 use p2panda_store::key_secrets::KeySecretsStore;
 use p2panda_store::operations::OperationStore;
-use p2panda_store::spaces::{
-    SpacesMessage, SpacesMessageStore, SpacesStore, SqliteSpacesStore,
-};
+use p2panda_store::spaces::{SpacesMessage, SpacesMessageStore, SpacesStore, SqliteSpacesStore};
 use p2panda_store::{SqliteError, SqliteStore, Transaction};
-use p2panda_auth::traits::Operation as AuthOperation;
 use serde::{Deserialize, Serialize};
 
 use crate::domain::{DomainExtensions, DomainOperation};
@@ -66,12 +64,16 @@ where
 {
     type Error = SqliteError;
 
-    async fn get_spaces_message(&self, id: &Hash) -> Result<Option<SpacesMessage<ARG>>, SqliteError> {
-        let operation = <SqliteStore as OperationStore<Operation<DomainExtensions>, Hash>>::get_operation(
-            &self.store,
-            id,
-        )
-        .await?;
+    async fn get_spaces_message(
+        &self,
+        id: &Hash,
+    ) -> Result<Option<SpacesMessage<ARG>>, SqliteError> {
+        let operation =
+            <SqliteStore as OperationStore<Operation<DomainExtensions>, Hash>>::get_operation(
+                &self.store,
+                id,
+            )
+            .await?;
         let Some(operation) = operation else {
             return Ok(None);
         };

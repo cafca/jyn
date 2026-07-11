@@ -16,14 +16,14 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
+use p2panda_auth::group::GroupCrdtState;
 use p2panda_auth::Access;
 use p2panda_core::cbor::{decode_cbor, encode_cbor};
+use p2panda_core::VerifyingKey;
 use p2panda_core::{Hash, Operation, SigningKey};
 use p2panda_encryption::crypto::hkdf::hkdf;
 use p2panda_encryption::crypto::x25519::SecretKey;
 use p2panda_encryption::Rng;
-use p2panda_auth::group::GroupCrdtState;
-use p2panda_core::VerifyingKey;
 use p2panda_spaces::manager::Manager;
 use p2panda_spaces::{
     Credentials, Event, SpaceId, SpacesArgs, SpacesStoreState, StrongRemoveResolver,
@@ -33,11 +33,9 @@ use p2panda_store::spaces::{SpacesMessage, SpacesStore};
 use p2panda_store::{SqliteStore, Transaction};
 use tracing::{debug, warn};
 
-use crate::domain::{
-    ensure_spaces_tables, DomainExtensions, DomainOperation, JynOperationDomain,
-};
-pub use forge::SpacesOutbox;
+use crate::domain::{ensure_spaces_tables, DomainExtensions, DomainOperation, JynOperationDomain};
 use forge::JynForge;
+pub use forge::SpacesOutbox;
 pub use store::spaces_args_from_operation;
 use store::JynSpacesStore;
 
@@ -159,9 +157,10 @@ impl JynSpaces {
     /// Idempotent; call at startup and after key rotation windows.
     pub async fn ensure_ready(&self) -> Result<()> {
         let _guard = self.ops_lock.lock().await;
-        let has_space = SpacesStore::<SpacesStoreState<()>>::has_space(&self.store, &self.my_space_id)
-            .await
-            .map_err(|err| anyhow::anyhow!("failed to check friends space: {err}"))?;
+        let has_space =
+            SpacesStore::<SpacesStoreState<()>>::has_space(&self.store, &self.my_space_id)
+                .await
+                .map_err(|err| anyhow::anyhow!("failed to check friends space: {err}"))?;
 
         let bundle_missing = self.meta_get("key_bundle_published").await?.is_none();
         let bundle_expired = self
@@ -296,9 +295,7 @@ impl JynSpaces {
         let space_id = self
             .space_of_owner(owner_profile_id)
             .await?
-            .with_context(|| {
-                format!("no known encryption space for profile {owner_profile_id}")
-            })?;
+            .with_context(|| format!("no known encryption space for profile {owner_profile_id}"))?;
         self.encrypt_to_space(space_id, inner).await
     }
 
@@ -432,8 +429,7 @@ impl JynSpaces {
                         debug!(message_id = %message.id, "spaces message not processable yet: {err:#}");
                         let mut pending =
                             self.pending.lock().expect("spaces pending lock poisoned");
-                        if let Some(entry) =
-                            pending.iter_mut().find(|p| p.message.id == message.id)
+                        if let Some(entry) = pending.iter_mut().find(|p| p.message.id == message.id)
                         {
                             entry.attempts += 1;
                             // Keep parked messages bounded: an undecryptable
@@ -482,7 +478,8 @@ impl JynSpaces {
         if let SpacesArgs::SpaceMembership { space_id, .. } = &message.args {
             // Single-admin spaces: membership messages are always authored by
             // the space owner, which is how members learn whose space it is.
-            self.record_space_owner(space_id, &author_profile_id).await?;
+            self.record_space_owner(space_id, &author_profile_id)
+                .await?;
         }
 
         for event in events {

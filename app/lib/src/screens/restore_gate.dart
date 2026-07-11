@@ -14,11 +14,13 @@ import '../theme/tokens.dart';
 /// app on whatever the choice left in the data directory.
 Future<void> runRestoreGate() async {
   final completer = Completer<void>();
-  runApp(MaterialApp(
-    title: 'jyn',
-    theme: jynTheme(),
-    home: _RestoreGate(onDone: completer.complete),
-  ));
+  runApp(
+    MaterialApp(
+      title: 'jyn',
+      theme: jynTheme(),
+      home: _RestoreGate(onDone: completer.complete),
+    ),
+  );
   await completer.future;
 }
 
