@@ -14,3 +14,6 @@
 .idea/
 .vscode/
 *.swp
+
+# Engineering skills: installed content is regenerable from skills-lock.json
+.agents/
