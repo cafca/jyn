@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/restore-skills.sh\"",
+            "async": true,
+            "timeout": 120,
+            "statusMessage": "Restoring pinned agent skills…"
+          }
+        ]
+      }
+    ]
+  }
+}
