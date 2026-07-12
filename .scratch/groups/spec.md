@@ -281,12 +281,13 @@ ownership transfer, and spaces-as-a-special-case are all additive later.
 
 ## Further Notes
 
-- **Open design item the implementer must resolve or escalate:** the exact
-  **key-delivery / re-key wire mechanism** for members-only Groups was settled
-  at the *model* level (single-admin auth group, lazy re-key on removal, no
-  clawback) but **not** at the byte/protocol level. This is the one part of the
-  spec that still needs protocol design before the members-only path is
-  implementable; treat it as the first thing to nail down.
+- **Members-only wire protocol — resolved, no design gate.** The key-delivery /
+  re-key mechanism reuses the `p2panda-spaces` `Manager` flow exactly as
+  `JynSpaces` does, per GroupId: key-bundle publication, a welcome payload on
+  member-add that delivers the group secret, lazy re-key via
+  `repair_spaces`/`remove_stale` before the next post, and trial-decrypt on
+  ingest. No bespoke protocol is invented; there is no design spike blocking the
+  encrypted path. (ADR-0015)
 - The **group-as-outward-user authoring mechanism** is explicitly undecided and
   out of scope; just don't foreclose it. (ADR-0014)
 - **Litmus test for the subsystem's generality:** an auto-derived, blinded,
