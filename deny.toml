@@ -37,7 +37,6 @@ allow = [
     "Apache-2.0 WITH LLVM-exception",
     "MIT",
     "MIT-0",
-    "BSD-1-Clause",
     "BSD-2-Clause",
     "BSD-3-Clause",
     "0BSD",
@@ -51,6 +50,21 @@ allow = [
     "Zlib",
 ]
 confidence-threshold = 0.9
+
+# allo-isolate's Cargo.toml omits the `license` field, but its LICENSE file
+# is the standard Apache-2.0 text and its README says as much; pin the
+# clarification to that file's hash instead of trusting crate metadata.
+[[licenses.clarify]]
+crate = "allo-isolate"
+expression = "Apache-2.0"
+license-files = [
+    { path = "LICENSE", hash = 0x0a6d4ed6 },
+]
+
+[licenses.private]
+# jyn itself carries no license (proprietary, all rights reserved) and is
+# marked `publish = false`; don't flag it as an unlicensed dependency.
+ignore = true
 
 [bans]
 # The dependency tree is wide (iroh + p2panda + Flutter FFI); duplicate

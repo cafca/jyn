@@ -2,8 +2,8 @@
 name = "jyn"
 version = "0.1.0"
 edition = "2021"
-authors = ["p2panda contributors"]
-license = "MIT OR Apache-2.0"
+authors = ["Vincent Ahrend"]
+publish = false
 
 [lib]
 crate-type = ["lib", "staticlib", "cdylib"]
