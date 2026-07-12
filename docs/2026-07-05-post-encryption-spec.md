@@ -201,3 +201,22 @@ wire and at rest.
 - Backup media modes: full (default) / kept-only / metadata-only. Expired
   blobs are never archived; restore stages blob bytes and the next start
   re-imports and re-pins them from the restored records.
+
+## Deferred follow-ups
+
+- **Honest ephemerality statement in the UI.** Where post lifetimes/expiry
+  are explained, the app should state plainly that expiry removes the
+  readable content and media everywhere, but the encrypted operation record
+  may persist as *unreadable bytes* until a protocol-level log-prune
+  capability exists (see below). This keeps the user-facing promise honest —
+  no claim of cryptographic erasure. Descoped from the Phase 3 ephemerality-GC
+  work (which deletes recoverable content — media + decrypted plaintext); this
+  is a copy/UI change with no engine dependency and can land any time.
+- **Ciphertext-operation erasure needs an upstream log-prune primitive.** The
+  append-only log has no prune/truncate/delete; Phase 3 GC therefore removes
+  media and decrypted plaintext but leaves the encrypted record as
+  undecryptable bytes. True erasure is a scoped p2panda ask (analogous to the
+  visible-cone auth-scoping contribution).
+- **Reshare-by-reference dedup** — only relevant once a reshare feature
+  exists; a reshare should point at the original ciphertext blob and re-wrap
+  its per-blob key rather than re-encrypting.
