@@ -33,7 +33,11 @@ use crate::groups::{GroupContentMode, GroupDiscoverability, GroupGovernanceActio
 
 // v2: the group-encryption flag day. Old plaintext clients stay on v1 topics
 // and never exchange operations with encrypted ones.
-const DOMAIN_TOPIC_NAMESPACE: &[u8] = b"jyn/domain/v2";
+// v3: the Groups flag day. `GroupMembershipAdvertised` is a new operation
+// variant on the shared Contacts topic; released v2 clients hard-error on an
+// unknown variant and would drop the whole author's reduction, so the topic
+// namespace moves again and old and new clients never share a topic.
+const DOMAIN_TOPIC_NAMESPACE: &[u8] = b"jyn/domain/v3";
 /// Each Group is its own replication topic derived from its GroupId
 /// (ADR-0007) — a replication axis alongside the per-profile topics.
 const GROUP_TOPIC_NAMESPACE: &[u8] = b"jyn/groups/v1";

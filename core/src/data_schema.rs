@@ -21,7 +21,13 @@ use tracing::{info, warn};
 /// migrated. The sync topic namespace moved to `jyn/domain/v2`, so pre-v3
 /// clients never even share topics with encrypted ones. The identity keypair
 /// survives: profile ids and friend codes stay stable, friendships re-form.
-pub const DATA_SCHEMA_VERSION: u32 = 3;
+/// v4: Groups flag day. Groups add a new operation variant
+/// (`GroupMembershipAdvertised`) on the shared Contacts topic that released
+/// v3 clients cannot decode; the sync topic namespace moved to
+/// `jyn/domain/v3` to partition them off, and the local domain store is wiped
+/// so no operations linger on the retired `jyn/domain/v2` topics. Identity and
+/// settings survive as always.
+pub const DATA_SCHEMA_VERSION: u32 = 4;
 
 const SCHEMA_VERSION_FILE: &str = "schema.version";
 

@@ -103,12 +103,17 @@ constant shared by the spaces and groups services (drift would fork the auth
 state); built the `GroupCreated` genesis op once instead of two field-for-field
 literals that could diverge.
 
+**Also fixed — protocol flag day:** `GroupMembershipAdvertised` rides the
+shipped `jyn/domain/v2` Contacts topic, and released clients hard-error on the
+unknown variant (dropping an upgraded friend's whole reduction). Pre-1.0 and
+released off this branch, so we took the flag day now: `DOMAIN_TOPIC_NAMESPACE`
+`v2`→`v3` (old clients partition off and never receive the new variant) and
+`DATA_SCHEMA_VERSION` `3`→`4` (local domain store wiped on upgrade so nothing
+lingers on the retired topics). Identity, friend codes and settings survive;
+posts/friendships re-form. Because the reducer now skips undecodable ops, later
+additive variants won't need another bump.
+
 **Deferred follow-ups (not blocking; recorded for later):**
-- *Old-client protocol break*: `GroupMembershipAdvertised` rides the shipped
-  `jyn/domain/v2` Contacts topic; released 0.2.0 clients hard-error on the
-  unknown variant, wiping an upgraded friend's whole presence. Mitigation is a
-  namespace flag-day bump (v2→v3), a **product decision** (forces a domain-log
-  wipe) — left for the owner to call before any mixed-version rollout.
 - *Non-atomic ownership transfer*: promote-heir + demote-self are two ops with
   no atomicity; a crash between them strands two `Manage` holders. Recoverable
   with existing ops (either holder can demote the other) but not self-healing —
