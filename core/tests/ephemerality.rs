@@ -90,14 +90,18 @@ async fn publish_post_with_media(
             }],
         },
     })?;
-    wait_for_event(bridge, "published post with attachment", |event| match event {
-        NetworkEvent::LocalStateUpdated { state } => state
-            .posts
-            .iter()
-            .find(|post| post.body == body && !post.media.is_empty())
-            .map(|post| (post.post_id.clone(), post.media[0].blob_hash.clone())),
-        _ => None,
-    })
+    wait_for_event(
+        bridge,
+        "published post with attachment",
+        |event| match event {
+            NetworkEvent::LocalStateUpdated { state } => state
+                .posts
+                .iter()
+                .find(|post| post.body == body && !post.media.is_empty())
+                .map(|post| (post.post_id.clone(), post.media[0].blob_hash.clone())),
+            _ => None,
+        },
+    )
     .await
 }
 
@@ -157,7 +161,10 @@ async fn expired_non_public_post_media_is_torn_down_on_drain() -> Result<()> {
     )
     .await?;
     let cached = cache_file(dir.path(), &blob_hash);
-    assert!(cached.is_file(), "publishing materializes the plaintext cache");
+    assert!(
+        cached.is_file(),
+        "publishing materializes the plaintext cache"
+    );
 
     expire_now(&bridge, &post_id).await?;
     drain(&bridge).await?;
@@ -253,7 +260,11 @@ async fn acting_on_a_torn_down_post_is_a_safe_no_op() -> Result<()> {
 
     // No error surfaced, and the post did not come back to life.
     for event in bridge.drain_events() {
-        if let NetworkEvent::Error { context, error_message } = event {
+        if let NetworkEvent::Error {
+            context,
+            error_message,
+        } = event
+        {
             anyhow::bail!("unexpected error event [{context}]: {error_message}");
         }
     }

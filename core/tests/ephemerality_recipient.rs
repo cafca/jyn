@@ -188,11 +188,7 @@ async fn publish_with_media(
 
 /// Waits until `contact`'s reduced view of `author` contains a post with
 /// `body`, returning that post's attachment blob hash.
-async fn wait_for_received(
-    recipient: &AsyncBridge,
-    author_id: &str,
-    body: &str,
-) -> Result<String> {
+async fn wait_for_received(recipient: &AsyncBridge, author_id: &str, body: &str) -> Result<String> {
     wait_for_event(recipient, "received post", |event| match event {
         NetworkEvent::ContactStateUpdated { profile_id, state } if profile_id == author_id => state
             .posts
@@ -209,10 +205,14 @@ async fn fetch_media(recipient: &AsyncBridge, blob_hash: &str) -> Result<PathBuf
         blob_hash: blob_hash.to_owned(),
     })?;
     wait_for_event(recipient, "media fetch", |event| match event {
-        NetworkEvent::MediaReady { blob_hash: ready, path } if ready == blob_hash => {
-            Some(path.clone())
-        }
-        NetworkEvent::MediaFailed { blob_hash: failed, error_message } if failed == blob_hash => {
+        NetworkEvent::MediaReady {
+            blob_hash: ready,
+            path,
+        } if ready == blob_hash => Some(path.clone()),
+        NetworkEvent::MediaFailed {
+            blob_hash: failed,
+            error_message,
+        } if failed == blob_hash => {
             // Surface as an error by returning a sentinel the caller asserts on.
             panic!("media fetch failed for {failed}: {error_message}")
         }
@@ -233,14 +233,20 @@ async fn expire_on_author_and_await_recipient(
         post_id: post_id.to_owned(),
         expires_at: Some(1),
     })?;
-    wait_for_event(recipient, "recipient to see the expiry", |event| match event {
-        NetworkEvent::ContactStateUpdated { profile_id, state } if profile_id == author_id => state
-            .posts
-            .iter()
-            .find(|post| post.post_id == post_id)
-            .and_then(|post| (post.expires_at == Some(1)).then_some(())),
-        _ => None,
-    })
+    wait_for_event(
+        recipient,
+        "recipient to see the expiry",
+        |event| match event {
+            NetworkEvent::ContactStateUpdated { profile_id, state } if profile_id == author_id => {
+                state
+                    .posts
+                    .iter()
+                    .find(|post| post.post_id == post_id)
+                    .and_then(|post| (post.expires_at == Some(1)).then_some(()))
+            }
+            _ => None,
+        },
+    )
     .await
 }
 
@@ -261,14 +267,22 @@ async fn expired_post_is_torn_down_on_the_recipient() -> Result<()> {
     befriend(&bob, &bob_id, &alice, &alice_id, relay_url.as_ref()).await?;
 
     // Alice posts to friends; Bob receives it and fetches the media.
-    let (post_id, blob_hash) =
-        publish_with_media(&alice, &staging, "shared.png", "for my friends", Visibility::Friends)
-            .await?;
+    let (post_id, blob_hash) = publish_with_media(
+        &alice,
+        &staging,
+        "shared.png",
+        "for my friends",
+        Visibility::Friends,
+    )
+    .await?;
     let received_hash = wait_for_received(&bob, &alice_id, "for my friends").await?;
     assert_eq!(received_hash, blob_hash);
     fetch_media(&bob, &blob_hash).await?;
     let bob_cache = cache_file(dir_b.path(), &blob_hash);
-    assert!(bob_cache.is_file(), "Bob materialized the plaintext locally");
+    assert!(
+        bob_cache.is_file(),
+        "Bob materialized the plaintext locally"
+    );
 
     // Alice lets it expire; Bob learns the new lifetime, then drains.
     expire_on_author_and_await_recipient(&alice, &bob, &alice_id, &post_id).await?;
@@ -311,9 +325,14 @@ async fn a_recipients_kept_copy_survives_the_originals_expiry() -> Result<()> {
     let (bob, bob_id) = spawn_onboarded(dir_b.path(), opts.clone(), "Bob").await?;
     befriend(&bob, &bob_id, &alice, &alice_id, relay_url.as_ref()).await?;
 
-    let (post_id, blob_hash) =
-        publish_with_media(&alice, &staging, "cherished.png", "hold this for me", Visibility::Friends)
-            .await?;
+    let (post_id, blob_hash) = publish_with_media(
+        &alice,
+        &staging,
+        "cherished.png",
+        "hold this for me",
+        Visibility::Friends,
+    )
+    .await?;
     wait_for_received(&bob, &alice_id, "hold this for me").await?;
     fetch_media(&bob, &blob_hash).await?;
 
@@ -356,7 +375,10 @@ async fn a_recipients_kept_copy_survives_the_originals_expiry() -> Result<()> {
     // the store because the keep/ pin still holds the blob, and its secret
     // comes from the keep snapshot.
     let path = fetch_media(&bob, &blob_hash).await?;
-    assert!(path.is_file(), "the kept copy's media survives the teardown");
+    assert!(
+        path.is_file(),
+        "the kept copy's media survives the teardown"
+    );
     Ok(())
 }
 
@@ -373,9 +395,14 @@ async fn an_offline_recipient_tears_down_on_next_start() -> Result<()> {
     let (bob, bob_id) = spawn_onboarded(dir_b.path(), opts.clone(), "Bob").await?;
     befriend(&bob, &bob_id, &alice, &alice_id, relay_url.as_ref()).await?;
 
-    let (post_id, blob_hash) =
-        publish_with_media(&alice, &staging, "fading.png", "gone by morning", Visibility::Friends)
-            .await?;
+    let (post_id, blob_hash) = publish_with_media(
+        &alice,
+        &staging,
+        "fading.png",
+        "gone by morning",
+        Visibility::Friends,
+    )
+    .await?;
     wait_for_received(&bob, &alice_id, "gone by morning").await?;
     fetch_media(&bob, &blob_hash).await?;
     let bob_cache = cache_file(dir_b.path(), &blob_hash);
@@ -475,7 +502,10 @@ async fn a_friend_of_friend_tears_down_an_expired_circles_post() -> Result<()> {
         "a friend-of-friend decrypts the circles media rather than caching ciphertext"
     );
     let carol_cache = cache_file(dir_c.path(), &blob_hash);
-    assert!(carol_cache.is_file(), "Carol materialized the circles media");
+    assert!(
+        carol_cache.is_file(),
+        "Carol materialized the circles media"
+    );
 
     // Alice lets that post expire; Carol learns of it and drains.
     expire_on_author_and_await_recipient(&alice, &carol, &alice_id, &carol_post_id).await?;

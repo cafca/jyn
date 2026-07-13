@@ -216,7 +216,11 @@ impl JynSyncService {
     /// be recovered from disk: both the locally-cached decrypted text and the
     /// encrypted payload (body) of the stored operation are removed, leaving
     /// only header-only metadata in the log.
-    pub(crate) async fn erase_post_content(&self, profile_id: &str, post_id: &str) -> Result<usize> {
+    pub(crate) async fn erase_post_content(
+        &self,
+        profile_id: &str,
+        post_id: &str,
+    ) -> Result<usize> {
         self.domain.erase_post_content(profile_id, post_id).await
     }
 

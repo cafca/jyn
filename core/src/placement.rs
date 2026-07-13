@@ -144,7 +144,10 @@ mod tests {
     #[test]
     fn chips_coarsen_up_to_the_next_rung() {
         assert_eq!(LifetimeChip::for_remaining(0), LifetimeChip::SixHours);
-        assert_eq!(LifetimeChip::for_remaining(6 * 3600), LifetimeChip::SixHours);
+        assert_eq!(
+            LifetimeChip::for_remaining(6 * 3600),
+            LifetimeChip::SixHours
+        );
         assert_eq!(
             LifetimeChip::for_remaining(6 * 3600 + 1),
             LifetimeChip::OneDay

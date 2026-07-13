@@ -508,9 +508,7 @@ impl JynOperationDomain {
             DomainOperation::HeartChanged {
                 recorded_at: at, ..
             }
-            | DomainOperation::CommentPublished {
-                created_at: at, ..
-            } => {
+            | DomainOperation::CommentPublished { created_at: at, .. } => {
                 self.log_id_for_context(&LogBucket::place_reaction(*at).context_key())
                     .await
             }
@@ -1131,7 +1129,8 @@ impl JynOperationDomain {
                 continue;
             }
             if is_wrapper {
-                self.delete_decrypted_inner_operation(&operation.hash).await?;
+                self.delete_decrypted_inner_operation(&operation.hash)
+                    .await?;
             }
             <SqliteStore as OperationStore<Operation<DomainExtensions>, Hash>>::delete_operation_payload(
                 &self.store,
@@ -1193,10 +1192,9 @@ impl JynOperationDomain {
         dead: &HashSet<(String, String)>,
     ) -> Result<usize> {
         self.erase_content_where(holder_profile_id, |op| {
-            op.reaction_target()
-                .is_some_and(|(author, post_id)| {
-                    dead.contains(&(author.to_owned(), post_id.to_owned()))
-                })
+            op.reaction_target().is_some_and(|(author, post_id)| {
+                dead.contains(&(author.to_owned(), post_id.to_owned()))
+            })
         })
         .await
     }
@@ -1278,10 +1276,8 @@ impl JynOperationDomain {
                                 .get(post_id)
                                 .is_none_or(|(seen, _, _)| ts > *seen);
                             if newer {
-                                newest_pub.insert(
-                                    post_id.clone(),
-                                    (ts, *expires_at, profile_id.clone()),
-                                );
+                                newest_pub
+                                    .insert(post_id.clone(), (ts, *expires_at, profile_id.clone()));
                             }
                         }
                         EffectiveOp::Decoded(DomainOperation::PostRehomed { post_id, .. }) => {
@@ -1368,7 +1364,9 @@ impl JynOperationDomain {
                     }
                 }
 
-                if let Err(err) = self.prune_and_unassociate(&topic, &author, &log_id, max_seq).await
+                if let Err(err) = self
+                    .prune_and_unassociate(&topic, &author, &log_id, max_seq)
+                    .await
                 {
                     warn!(log_id = log_id.0, "failed to drop drained log: {err:#}");
                     continue;
@@ -1379,7 +1377,10 @@ impl JynOperationDomain {
                 // collide with one of our live contexts.
                 if author.to_string() == local_profile_id {
                     if let Err(err) = self.forget_log_registry(&log_id).await {
-                        warn!(log_id = log_id.0, "failed to forget drained log context: {err:#}");
+                        warn!(
+                            log_id = log_id.0,
+                            "failed to forget drained log context: {err:#}"
+                        );
                     }
                 }
             }
@@ -1460,12 +1461,12 @@ impl JynOperationDomain {
             return Ok(EffectiveOp::Opaque);
         };
         match decoded {
-            DomainOperation::Spaces { .. } => {
-                Ok(match self.decrypted_inner_operation(&operation.hash).await? {
+            DomainOperation::Spaces { .. } => Ok(
+                match self.decrypted_inner_operation(&operation.hash).await? {
                     Some(inner) => EffectiveOp::Decoded(inner),
                     None => EffectiveOp::Opaque,
-                })
-            }
+                },
+            ),
             other => Ok(EffectiveOp::Decoded(other)),
         }
     }
@@ -1653,7 +1654,10 @@ mod tests {
             )
             .await?;
         domain
-            .append_operation(&key, text_post(&profile_id, "post-a", "ebbing", Some(100), 10))
+            .append_operation(
+                &key,
+                text_post(&profile_id, "post-a", "ebbing", Some(100), 10),
+            )
             .await?;
         domain
             .append_operation(&key, text_post(&profile_id, "post-b", "settled", None, 20))
@@ -1661,10 +1665,7 @@ mod tests {
 
         let topic = profile_sync_topic(&profile_id);
         let logs = TopicStore::<Topic, VerifyingKey, DomainLogId>::resolve(&store, &topic).await?;
-        let resolved = logs
-            .get(&key.verifying_key())
-            .cloned()
-            .unwrap_or_default();
+        let resolved = logs.get(&key.verifying_key()).cloned().unwrap_or_default();
         // Profile log (reserved id 0), one ephemeral bucket, one permanent
         // bucket — three distinct logs, all on the one topic.
         assert_eq!(resolved.len(), 3);
@@ -1814,7 +1815,9 @@ mod tests {
         };
         // A reaction is placed by its own creation month — never the post's
         // bucket — so a later lifetime change to the post can't strand it.
-        let same_month = domain.log_id_for(&heart(crate::placement::MONTH_SECS + 10)).await?;
+        let same_month = domain
+            .log_id_for(&heart(crate::placement::MONTH_SECS + 10))
+            .await?;
         let same_month_again = domain
             .log_id_for(&heart(crate::placement::MONTH_SECS + 20))
             .await?;
@@ -2130,10 +2133,7 @@ mod tests {
         // Reduction tolerates the body-less op (skips it) rather than erroring,
         // and the post is absent from reconstructed state.
         let state = domain.read_profile_state(&profile_id).await?;
-        assert!(state.is_none_or(|state| state
-            .posts
-            .iter()
-            .all(|post| post.post_id != "post-x")));
+        assert!(state.is_none_or(|state| state.posts.iter().all(|post| post.post_id != "post-x")));
 
         // Idempotent: a second teardown erases nothing (the op is already
         // body-less and skipped).
@@ -2491,7 +2491,10 @@ mod tests {
         // A post whose expiry is already in the past: its whole bucket window
         // has closed, so GC may drop the entire log.
         domain
-            .append_operation(&key, text_post(&profile_id, "post-a", "ebbing", Some(50), 10))
+            .append_operation(
+                &key,
+                text_post(&profile_id, "post-a", "ebbing", Some(50), 10),
+            )
             .await?;
         let before = topic_log_ids(&store, &profile_id).await?;
         assert_eq!(before.len(), 1, "the post's bucket log is associated");
@@ -2662,8 +2665,9 @@ mod tests {
 
         // Once the target post is dead, the reaction is reaped (content erased)
         // and its now-empty month bucket drops wholesale.
-        let dead: HashSet<(String, String)> =
-            [(author_id.clone(), "post-x".to_owned())].into_iter().collect();
+        let dead: HashSet<(String, String)> = [(author_id.clone(), "post-x".to_owned())]
+            .into_iter()
+            .collect();
         assert_eq!(
             domain
                 .reap_reactions_for_dead_targets(&reactor_id, &dead)
@@ -2708,7 +2712,9 @@ mod tests {
             .await?;
 
         let dead = HashSet::new();
-        domain.drop_drained_buckets(&target_id, &requester_id, FUTURE, &dead).await?;
+        domain
+            .drop_drained_buckets(&target_id, &requester_id, FUTURE, &dead)
+            .await?;
 
         // GC leaves it alone — a pending request isn't co-deletion content.
         assert_eq!(topic_log_ids(&store, &target_id).await?.len(), 1);
@@ -2748,8 +2754,9 @@ mod tests {
             .await?;
 
         // Delete drains the bucket; GC drops the whole log.
-        let dead: HashSet<(String, String)> =
-            [(profile_id.clone(), "post-a".to_owned())].into_iter().collect();
+        let dead: HashSet<(String, String)> = [(profile_id.clone(), "post-a".to_owned())]
+            .into_iter()
+            .collect();
         domain
             .drop_drained_buckets(&profile_id, &profile_id, FUTURE, &dead)
             .await?;
@@ -2761,14 +2768,17 @@ mod tests {
         let second = text_post(&profile_id, "post-b", "new one", None, 15);
         let reused_id = domain.log_id_for(&second).await?;
         assert_ne!(reused_id, retired_id);
-        assert!(reused_id.0 > retired_id.0, "the allocator only ever moves forward");
+        assert!(
+            reused_id.0 > retired_id.0,
+            "the allocator only ever moves forward"
+        );
 
         Ok(())
     }
 
     #[tokio::test]
-    async fn dropping_a_re_homed_posts_old_bucket_does_not_reclaim_its_still_live_media() -> Result<()>
-    {
+    async fn dropping_a_re_homed_posts_old_bucket_does_not_reclaim_its_still_live_media(
+    ) -> Result<()> {
         let key = SigningKey::generate();
         let profile_id = key.verifying_key().to_string();
         let store = SqliteStore::temporary().await;
@@ -2847,7 +2857,11 @@ mod tests {
         // snapshot is still live (expiry far in the future).
         let log = DomainLogId(DomainLogId::FIRST_DYNAMIC);
         domain
-            .append_operation_in_log(&key, text_post(&profile_id, "post-a", "old", Some(100), 10), log)
+            .append_operation_in_log(
+                &key,
+                text_post(&profile_id, "post-a", "old", Some(100), 10),
+                log,
+            )
             .await?;
         domain
             .append_operation_in_log(

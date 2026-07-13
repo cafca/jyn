@@ -42,8 +42,8 @@ use tracing::{debug, warn};
 use crate::domain::{
     ensure_spaces_tables, DomainExtensions, DomainOperation, JynOperationDomain, Visibility,
 };
-use forge::{JynForge, PlacementHint};
 pub use forge::SpacesOutbox;
+use forge::{JynForge, PlacementHint};
 pub use store::spaces_args_from_operation;
 use store::JynSpacesStore;
 

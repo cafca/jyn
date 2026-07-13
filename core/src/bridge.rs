@@ -725,7 +725,9 @@ async fn publish_interaction(
     let visibility = post_visibility(state, post_author_profile_id, post_id)
         .await?
         .with_context(|| {
-            format!("that post has expired or was removed, so it can't be reacted to (post {post_id})")
+            format!(
+                "that post has expired or was removed, so it can't be reacted to (post {post_id})"
+            )
         })?;
     let mut sync = state.sync.lock().await;
     if visibility == Visibility::Public {
