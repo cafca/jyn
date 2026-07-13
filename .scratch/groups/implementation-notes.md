@@ -1,7 +1,11 @@
 # Groups implementation notes (working doc)
 
-Status: in-progress. Companion to `spec.md`; records the concrete mapping of
-the spec onto this codebase, settled while implementing.
+Status: complete. Companion to `spec.md`; records the concrete mapping of the
+spec onto this codebase, settled while implementing. All four tickets are
+landed, reviewed and verified. Two spec stories are intentionally out of
+scope (decisions, not gaps): story 28 (clawback) ships as honest no-clawback
+until phase-3 retention lands on `main`, and story 23 (keep-a-group-post) is a
+recorded follow-up — both noted in the ticket comments.
 
 ## Wire / domain layer
 
