@@ -977,7 +977,8 @@ impl JynOperationDomain {
             }
             if let Some(inner) = self.decrypted_inner_operation(&operation.hash).await? {
                 if inner.content_post_id() == Some(post_id) {
-                    self.delete_decrypted_inner_operation(&operation.hash).await?;
+                    self.delete_decrypted_inner_operation(&operation.hash)
+                        .await?;
                     // Drop the ciphertext body too, so the encrypted payload
                     // cannot be recovered either — only the header survives.
                     <SqliteStore as OperationStore<Operation<DomainExtensions>, Hash>>::delete_operation_payload(
@@ -1340,10 +1341,7 @@ mod tests {
         // Reduction tolerates the body-less op (skips it) rather than erroring,
         // and the post is absent from reconstructed state.
         let state = domain.read_profile_state(&profile_id).await?;
-        assert!(state.is_none_or(|state| state
-            .posts
-            .iter()
-            .all(|post| post.post_id != "post-x")));
+        assert!(state.is_none_or(|state| state.posts.iter().all(|post| post.post_id != "post-x")));
 
         // Idempotent: a second teardown erases nothing (the op is already
         // body-less and skipped).
