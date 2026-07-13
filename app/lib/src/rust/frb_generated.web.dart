@@ -15,6 +15,9 @@ import 'dart:convert';
 import 'diagnostics.dart';
 import 'domain.dart';
 import 'frb_generated.dart';
+import 'groups.dart';
+import 'groups/reduce.dart';
+import 'groups/service.dart';
 import 'media.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated_web.dart';
 import 'profile.dart';
@@ -52,6 +55,17 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   DiagnosticsSnapshot dco_decode_box_autoadd_diagnostics_snapshot(dynamic raw);
 
   @protected
+  GroupDiscoverability dco_decode_box_autoadd_group_discoverability(
+    dynamic raw,
+  );
+
+  @protected
+  GroupJoinMode dco_decode_box_autoadd_group_join_mode(dynamic raw);
+
+  @protected
+  GroupView dco_decode_box_autoadd_group_view(dynamic raw);
+
+  @protected
   int dco_decode_box_autoadd_u_32(dynamic raw);
 
   @protected
@@ -74,6 +88,45 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   GossipTopicSnapshot dco_decode_gossip_topic_snapshot(dynamic raw);
+
+  @protected
+  GroupComment dco_decode_group_comment(dynamic raw);
+
+  @protected
+  GroupContentMode dco_decode_group_content_mode(dynamic raw);
+
+  @protected
+  GroupDigestDoor dco_decode_group_digest_door(dynamic raw);
+
+  @protected
+  GroupDiscoverability dco_decode_group_discoverability(dynamic raw);
+
+  @protected
+  GroupDiscoveryCard dco_decode_group_discovery_card(dynamic raw);
+
+  @protected
+  GroupHeart dco_decode_group_heart(dynamic raw);
+
+  @protected
+  GroupJoinMode dco_decode_group_join_mode(dynamic raw);
+
+  @protected
+  GroupJoinRequest dco_decode_group_join_request(dynamic raw);
+
+  @protected
+  GroupMemberEntry dco_decode_group_member_entry(dynamic raw);
+
+  @protected
+  GroupRole dco_decode_group_role(dynamic raw);
+
+  @protected
+  GroupSuggestion dco_decode_group_suggestion(dynamic raw);
+
+  @protected
+  GroupView dco_decode_group_view(dynamic raw);
+
+  @protected
+  GroupViewerStatus dco_decode_group_viewer_status(dynamic raw);
 
   @protected
   int dco_decode_i_32(dynamic raw);
@@ -104,6 +157,30 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<GossipTopicSnapshot> dco_decode_list_gossip_topic_snapshot(dynamic raw);
 
   @protected
+  List<GroupComment> dco_decode_list_group_comment(dynamic raw);
+
+  @protected
+  List<GroupDigestDoor> dco_decode_list_group_digest_door(dynamic raw);
+
+  @protected
+  List<GroupDiscoveryCard> dco_decode_list_group_discovery_card(dynamic raw);
+
+  @protected
+  List<GroupHeart> dco_decode_list_group_heart(dynamic raw);
+
+  @protected
+  List<GroupJoinRequest> dco_decode_list_group_join_request(dynamic raw);
+
+  @protected
+  List<GroupMemberEntry> dco_decode_list_group_member_entry(dynamic raw);
+
+  @protected
+  List<GroupRole> dco_decode_list_group_role(dynamic raw);
+
+  @protected
+  List<GroupSuggestion> dco_decode_list_group_suggestion(dynamic raw);
+
+  @protected
   List<MediaAttachment> dco_decode_list_media_attachment(dynamic raw);
 
   @protected
@@ -119,6 +196,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
+
+  @protected
+  List<ReducedPost> dco_decode_list_reduced_post(dynamic raw);
 
   @protected
   List<RiverComment> dco_decode_list_river_comment(dynamic raw);
@@ -149,6 +229,14 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   String? dco_decode_opt_String(dynamic raw);
+
+  @protected
+  GroupDiscoverability? dco_decode_opt_box_autoadd_group_discoverability(
+    dynamic raw,
+  );
+
+  @protected
+  GroupJoinMode? dco_decode_opt_box_autoadd_group_join_mode(dynamic raw);
 
   @protected
   int? dco_decode_opt_box_autoadd_u_32(dynamic raw);
@@ -236,6 +324,19 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  GroupDiscoverability sse_decode_box_autoadd_group_discoverability(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  GroupJoinMode sse_decode_box_autoadd_group_join_mode(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  GroupView sse_decode_box_autoadd_group_view(SseDeserializer deserializer);
+
+  @protected
   int sse_decode_box_autoadd_u_32(SseDeserializer deserializer);
 
   @protected
@@ -264,6 +365,51 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   GossipTopicSnapshot sse_decode_gossip_topic_snapshot(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  GroupComment sse_decode_group_comment(SseDeserializer deserializer);
+
+  @protected
+  GroupContentMode sse_decode_group_content_mode(SseDeserializer deserializer);
+
+  @protected
+  GroupDigestDoor sse_decode_group_digest_door(SseDeserializer deserializer);
+
+  @protected
+  GroupDiscoverability sse_decode_group_discoverability(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  GroupDiscoveryCard sse_decode_group_discovery_card(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  GroupHeart sse_decode_group_heart(SseDeserializer deserializer);
+
+  @protected
+  GroupJoinMode sse_decode_group_join_mode(SseDeserializer deserializer);
+
+  @protected
+  GroupJoinRequest sse_decode_group_join_request(SseDeserializer deserializer);
+
+  @protected
+  GroupMemberEntry sse_decode_group_member_entry(SseDeserializer deserializer);
+
+  @protected
+  GroupRole sse_decode_group_role(SseDeserializer deserializer);
+
+  @protected
+  GroupSuggestion sse_decode_group_suggestion(SseDeserializer deserializer);
+
+  @protected
+  GroupView sse_decode_group_view(SseDeserializer deserializer);
+
+  @protected
+  GroupViewerStatus sse_decode_group_viewer_status(
     SseDeserializer deserializer,
   );
 
@@ -298,6 +444,42 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  List<GroupComment> sse_decode_list_group_comment(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<GroupDigestDoor> sse_decode_list_group_digest_door(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<GroupDiscoveryCard> sse_decode_list_group_discovery_card(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<GroupHeart> sse_decode_list_group_heart(SseDeserializer deserializer);
+
+  @protected
+  List<GroupJoinRequest> sse_decode_list_group_join_request(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<GroupMemberEntry> sse_decode_list_group_member_entry(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<GroupRole> sse_decode_list_group_role(SseDeserializer deserializer);
+
+  @protected
+  List<GroupSuggestion> sse_decode_list_group_suggestion(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   List<MediaAttachment> sse_decode_list_media_attachment(
     SseDeserializer deserializer,
   );
@@ -319,6 +501,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
+
+  @protected
+  List<ReducedPost> sse_decode_list_reduced_post(SseDeserializer deserializer);
 
   @protected
   List<RiverComment> sse_decode_list_river_comment(
@@ -353,6 +538,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   String? sse_decode_opt_String(SseDeserializer deserializer);
+
+  @protected
+  GroupDiscoverability? sse_decode_opt_box_autoadd_group_discoverability(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  GroupJoinMode? sse_decode_opt_box_autoadd_group_join_mode(
+    SseDeserializer deserializer,
+  );
 
   @protected
   int? sse_decode_opt_box_autoadd_u_32(SseDeserializer deserializer);
@@ -451,6 +646,24 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_box_autoadd_group_discoverability(
+    GroupDiscoverability self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_box_autoadd_group_join_mode(
+    GroupJoinMode self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_box_autoadd_group_view(
+    GroupView self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_box_autoadd_u_32(int self, SseSerializer serializer);
 
   @protected
@@ -486,6 +699,69 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_gossip_topic_snapshot(
     GossipTopicSnapshot self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_group_comment(GroupComment self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_group_content_mode(
+    GroupContentMode self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_group_digest_door(
+    GroupDigestDoor self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_group_discoverability(
+    GroupDiscoverability self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_group_discovery_card(
+    GroupDiscoveryCard self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_group_heart(GroupHeart self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_group_join_mode(GroupJoinMode self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_group_join_request(
+    GroupJoinRequest self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_group_member_entry(
+    GroupMemberEntry self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_group_role(GroupRole self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_group_suggestion(
+    GroupSuggestion self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_group_view(GroupView self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_group_viewer_status(
+    GroupViewerStatus self,
     SseSerializer serializer,
   );
 
@@ -529,6 +805,54 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_group_comment(
+    List<GroupComment> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_group_digest_door(
+    List<GroupDigestDoor> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_group_discovery_card(
+    List<GroupDiscoveryCard> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_group_heart(
+    List<GroupHeart> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_group_join_request(
+    List<GroupJoinRequest> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_group_member_entry(
+    List<GroupMemberEntry> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_group_role(
+    List<GroupRole> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_group_suggestion(
+    List<GroupSuggestion> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_list_media_attachment(
     List<MediaAttachment> self,
     SseSerializer serializer,
@@ -555,6 +879,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_list_prim_u_8_strict(
     Uint8List self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_reduced_post(
+    List<ReducedPost> self,
     SseSerializer serializer,
   );
 
@@ -608,6 +938,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_opt_box_autoadd_group_discoverability(
+    GroupDiscoverability? self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_opt_box_autoadd_group_join_mode(
+    GroupJoinMode? self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_opt_box_autoadd_u_32(int? self, SseSerializer serializer);

@@ -7,7 +7,7 @@
 //! the other way through [`AsyncBridge::send_awaited`], so every user action
 //! resolves (or throws) at its call site in Dart.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
@@ -19,11 +19,12 @@ use crate::app_config::{resolve_data_dir, resolve_node_options};
 use crate::bridge::{AsyncBridge, NetworkCommand, NetworkEvent};
 use crate::diagnostics::DiagnosticsSnapshot;
 use crate::domain::PendingFriendRequest;
+use crate::groups::{GroupSuggestion, GroupView, GroupViewerStatus};
 use crate::media::MediaCache;
 use crate::notifications::NotificationState;
 use crate::profile::{now_unix_secs, UserProfile};
 use crate::settings::{AppSettings, SettingsStore};
-use crate::state::{GhostCard, RiverPost, RiverState};
+use crate::state::{GhostCard, GroupDiscoveryCard, RiverPost, RiverState};
 
 const DIAGNOSTIC_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const EXPIRY_CHECK_INTERVAL: Duration = Duration::from_secs(1);
@@ -33,11 +34,24 @@ const PUMP_RECV_TIMEOUT: Duration = Duration::from_millis(200);
 /// of its slice of state, so Dart providers can replace rather than patch.
 #[derive(Debug, Clone)]
 pub enum JynEvent {
-    /// The materialized feed: alive posts newest-first, plus discovery
-    /// ghosts (doors to authors we don't follow yet).
+    /// The materialized feed: alive posts newest-first, discovery ghosts
+    /// (doors to authors we don't follow yet), one digest door per
+    /// member-group with new activity (ADR-0010), and friends' heart-driven
+    /// group discovery cards (ADR-0009).
     River {
         posts: Vec<RiverPost>,
         ghosts: Vec<GhostCard>,
+        doors: Vec<GroupDigestDoor>,
+        group_cards: Vec<GroupDiscoveryCard>,
+    },
+    /// One group's state changed, as this viewer may see it. Dart folds
+    /// these into the Groups hub and the group place screens.
+    Group {
+        view: GroupView,
+    },
+    /// The hub's friend-based suggestions (full snapshot, ADR-0012).
+    GroupSuggestions {
+        suggestions: Vec<GroupSuggestion>,
     },
     /// The local profile (onboarding state, composer defaults, name).
     Profile {
@@ -76,6 +90,16 @@ pub struct FriendEntry {
     pub follows_me_back: bool,
 }
 
+/// A single river entry per member-group with new activity, opening the
+/// group place — group posts never interleave individually (ADR-0010).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroupDigestDoor {
+    pub group_id: String,
+    pub name: String,
+    /// Sorts the door into the reverse-chron river.
+    pub latest_activity_at: u64,
+}
+
 /// Where runtime events are delivered. The Flutter API installs a stream
 /// sink behind this; tests install a channel.
 pub trait EventSink: Send + Sync {
@@ -95,6 +119,11 @@ struct Shared {
     follow_back_sent: HashSet<String>,
     media: MediaCache,
     notifications: NotificationState,
+    /// Latest viewer-filtered state per known group.
+    groups: HashMap<String, GroupView>,
+    /// Group activity changed since the last river snapshot, so the digest
+    /// doors need re-deriving even though no river source is dirty.
+    doors_dirty: bool,
     sink: Option<Box<dyn EventSink>>,
     /// Events that arrived before Dart attached its sink.
     pending: Vec<JynEvent>,
@@ -160,6 +189,8 @@ impl AppRuntime {
             follow_back_sent: HashSet::new(),
             media: MediaCache::new(&data_dir),
             notifications: NotificationState::default(),
+            groups: HashMap::new(),
+            doors_dirty: false,
             sink: None,
             pending: Vec::new(),
         }));
@@ -415,6 +446,14 @@ fn apply_event(
             // pending addition to the friends space.
             send_command(NetworkCommand::ReconcileSpaces);
         }
+        NetworkEvent::GroupUpdated { view } => {
+            shared.groups.insert(view.group_id.clone(), view.clone());
+            shared.doors_dirty = true;
+            shared.emit(JynEvent::Group { view });
+        }
+        NetworkEvent::GroupSuggestionsUpdated { suggestions } => {
+            shared.emit(JynEvent::GroupSuggestions { suggestions });
+        }
         NetworkEvent::Error {
             context,
             error_message,
@@ -437,16 +476,68 @@ fn refresh_river(
 ) {
     let now = now_unix_secs();
     let expired = expiry_check_due && shared.river.expiry_due(now);
-    if !shared.river.is_dirty() && !expired {
+    if !shared.river.is_dirty() && !expired && !shared.doors_dirty {
         return;
     }
-    shared.river.materialize(now);
+    if shared.river.is_dirty() || expired {
+        shared.river.materialize(now);
+    }
+    shared.doors_dirty = false;
     if expired {
         send_command(NetworkCommand::DrainExpired);
     }
     let posts = shared.river.river.clone();
     let ghosts = shared.river.ghosts.clone();
-    shared.emit(JynEvent::River { posts, ghosts });
+    let doors = digest_doors(&shared.groups);
+    // A discovery card for a group the viewer already belongs to is just
+    // noise — their river has the digest door instead.
+    let group_cards: Vec<GroupDiscoveryCard> = shared
+        .river
+        .group_cards
+        .iter()
+        .filter(|card| {
+            !shared.groups.get(&card.group_id).is_some_and(|view| {
+                matches!(
+                    view.viewer_status,
+                    GroupViewerStatus::Owner | GroupViewerStatus::Member
+                )
+            })
+        })
+        .cloned()
+        .collect();
+    shared.emit(JynEvent::River {
+        posts,
+        ghosts,
+        doors,
+        group_cards,
+    });
+}
+
+/// One digest door per member-group with activity newer than the viewer's
+/// last visit, sorted into the reverse-chron river by recency (ADR-0010).
+/// A river door requires membership — visited public groups get none.
+fn digest_doors(groups: &HashMap<String, GroupView>) -> Vec<GroupDigestDoor> {
+    let mut doors: Vec<GroupDigestDoor> = groups
+        .values()
+        .filter(|view| {
+            matches!(
+                view.viewer_status,
+                GroupViewerStatus::Owner | GroupViewerStatus::Member
+            ) && view.has_new_activity
+        })
+        .map(|view| GroupDigestDoor {
+            group_id: view.group_id.clone(),
+            name: view.name.clone(),
+            latest_activity_at: view.latest_activity_at,
+        })
+        .collect();
+    doors.sort_by(|left, right| {
+        right
+            .latest_activity_at
+            .cmp(&left.latest_activity_at)
+            .then_with(|| left.group_id.cmp(&right.group_id))
+    });
+    doors
 }
 
 /// Derives the friends-screen data from the local reduced state: everyone we
@@ -491,6 +582,8 @@ mod tests {
             follow_back_sent: HashSet::new(),
             media: MediaCache::new(&dir),
             notifications: NotificationState::default(),
+            groups: HashMap::new(),
+            doors_dirty: false,
             sink: Some(Box::new(sink)),
             pending: Vec::new(),
         }
@@ -509,6 +602,7 @@ mod tests {
             comments: Vec::new(),
             pending_requests: Vec::new(),
             tombstoned_post_ids: Vec::new(),
+            advertised_groups: Vec::new(),
         }
     }
 

@@ -6,6 +6,9 @@
 import '../diagnostics.dart';
 import '../domain.dart';
 import '../frb_generated.dart';
+import '../groups.dart';
+import '../groups/reduce.dart';
+import '../groups/service.dart';
 import '../profile.dart';
 import '../runtime.dart';
 import '../state.dart';

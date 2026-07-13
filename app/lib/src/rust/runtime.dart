@@ -6,6 +6,9 @@
 import 'diagnostics.dart';
 import 'domain.dart';
 import 'frb_generated.dart';
+import 'groups.dart';
+import 'groups/reduce.dart';
+import 'groups/service.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 import 'profile.dart';
@@ -39,16 +42,58 @@ class FriendEntry {
           followsMeBack == other.followsMeBack;
 }
 
+/// A single river entry per member-group with new activity, opening the
+/// group place — group posts never interleave individually (ADR-0010).
+class GroupDigestDoor {
+  final String groupId;
+  final String name;
+
+  /// Sorts the door into the reverse-chron river.
+  final int latestActivityAt;
+
+  const GroupDigestDoor({
+    required this.groupId,
+    required this.name,
+    required this.latestActivityAt,
+  });
+
+  @override
+  int get hashCode =>
+      groupId.hashCode ^ name.hashCode ^ latestActivityAt.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is GroupDigestDoor &&
+          runtimeType == other.runtimeType &&
+          groupId == other.groupId &&
+          name == other.name &&
+          latestActivityAt == other.latestActivityAt;
+}
+
 @freezed
 sealed class JynEvent with _$JynEvent {
   const JynEvent._();
 
-  /// The materialized feed: alive posts newest-first, plus discovery
-  /// ghosts (doors to authors we don't follow yet).
+  /// The materialized feed: alive posts newest-first, discovery ghosts
+  /// (doors to authors we don't follow yet), one digest door per
+  /// member-group with new activity (ADR-0010), and friends' heart-driven
+  /// group discovery cards (ADR-0009).
   const factory JynEvent.river({
     required List<RiverPost> posts,
     required List<GhostCard> ghosts,
+    required List<GroupDigestDoor> doors,
+    required List<GroupDiscoveryCard> groupCards,
   }) = JynEvent_River;
+
+  /// One group's state changed, as this viewer may see it. Dart folds
+  /// these into the Groups hub and the group place screens.
+  const factory JynEvent.group({required GroupView view}) = JynEvent_Group;
+
+  /// The hub's friend-based suggestions (full snapshot, ADR-0012).
+  const factory JynEvent.groupSuggestions({
+    required List<GroupSuggestion> suggestions,
+  }) = JynEvent_GroupSuggestions;
 
   /// The local profile (onboarding state, composer defaults, name).
   const factory JynEvent.profile({required UserProfile profile}) =

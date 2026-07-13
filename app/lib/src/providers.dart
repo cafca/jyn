@@ -11,6 +11,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../src/rust/api/lifecycle.dart' as rust;
 import '../src/rust/diagnostics.dart';
 import '../src/rust/domain.dart';
+import '../src/rust/groups/service.dart';
 import '../src/rust/profile.dart';
 import '../src/rust/runtime.dart';
 import '../src/rust/state.dart';
@@ -22,6 +23,10 @@ class AppModel {
   const AppModel({
     this.posts = const [],
     this.ghosts = const [],
+    this.doors = const [],
+    this.groupCards = const [],
+    this.groups = const {},
+    this.groupSuggestions = const [],
     this.profile,
     this.friends = const [],
     this.pendingRequests = const [],
@@ -35,6 +40,18 @@ class AppModel {
 
   /// Discovery doors: friends' hearts on posts by authors we don't follow.
   final List<GhostCard> ghosts;
+
+  /// One digest door per member-group with new activity, river-sorted.
+  final List<GroupDigestDoor> doors;
+
+  /// Friends' hearts on public+listed group posts: named doors into groups.
+  final List<GroupDiscoveryCard> groupCards;
+
+  /// GroupId → the group's latest viewer-filtered state.
+  final Map<String, GroupView> groups;
+
+  /// Groups friends advertise that the local user hasn't joined.
+  final List<GroupSuggestion> groupSuggestions;
 
   /// The local profile; null until the first Profile event.
   final UserProfile? profile;
@@ -52,6 +69,10 @@ class AppModel {
   AppModel copyWith({
     List<RiverPost>? posts,
     List<GhostCard>? ghosts,
+    List<GroupDigestDoor>? doors,
+    List<GroupDiscoveryCard>? groupCards,
+    Map<String, GroupView>? groups,
+    List<GroupSuggestion>? groupSuggestions,
     UserProfile? profile,
     List<FriendEntry>? friends,
     List<PendingFriendRequest>? pendingRequests,
@@ -62,6 +83,10 @@ class AppModel {
     return AppModel(
       posts: posts ?? this.posts,
       ghosts: ghosts ?? this.ghosts,
+      doors: doors ?? this.doors,
+      groupCards: groupCards ?? this.groupCards,
+      groups: groups ?? this.groups,
+      groupSuggestions: groupSuggestions ?? this.groupSuggestions,
       profile: profile ?? this.profile,
       friends: friends ?? this.friends,
       pendingRequests: pendingRequests ?? this.pendingRequests,
@@ -93,8 +118,22 @@ class AppModelNotifier extends Notifier<AppModel> {
 /// spec wants tested.
 AppModel applyEvent(AppModel model, JynEvent event) {
   switch (event) {
-    case JynEvent_River(:final posts, :final ghosts):
-      return model.copyWith(posts: posts, ghosts: ghosts);
+    case JynEvent_River(
+      :final posts,
+      :final ghosts,
+      :final doors,
+      :final groupCards,
+    ):
+      return model.copyWith(
+        posts: posts,
+        ghosts: ghosts,
+        doors: doors,
+        groupCards: groupCards,
+      );
+    case JynEvent_Group(:final view):
+      return model.copyWith(groups: {...model.groups, view.groupId: view});
+    case JynEvent_GroupSuggestions(:final suggestions):
+      return model.copyWith(groupSuggestions: suggestions);
     case JynEvent_Profile(:final profile):
       return model.copyWith(profile: profile);
     case JynEvent_Friends(:final friends, :final pending):
@@ -130,6 +169,39 @@ final riverPostsProvider = Provider(
 final ghostsProvider = Provider(
   (ref) => ref.watch(appModelProvider.select((m) => m.ghosts)),
 );
+final groupDoorsProvider = Provider(
+  (ref) => ref.watch(appModelProvider.select((m) => m.doors)),
+);
+final groupCardsProvider = Provider(
+  (ref) => ref.watch(appModelProvider.select((m) => m.groupCards)),
+);
+final groupSuggestionsProvider = Provider(
+  (ref) => ref.watch(appModelProvider.select((m) => m.groupSuggestions)),
+);
+final groupsProvider = Provider(
+  (ref) => ref.watch(appModelProvider.select((m) => m.groups)),
+);
+
+/// One group's latest state, for the place and admin screens.
+final groupProvider = Provider.family<GroupView?, String>(
+  (ref, groupId) => ref.watch(groupsProvider.select((groups) => groups[groupId])),
+);
+
+/// The Groups hub list: groups the local user belongs to, most recently
+/// active first.
+final myGroupsProvider = Provider<List<GroupView>>((ref) {
+  final groups = ref.watch(groupsProvider).values.where(
+    (view) =>
+        view.viewerStatus == GroupViewerStatus.owner ||
+        view.viewerStatus == GroupViewerStatus.member,
+  ).toList()
+    ..sort(
+      (a, b) => b.latestActivityAt != a.latestActivityAt
+          ? b.latestActivityAt.compareTo(a.latestActivityAt)
+          : a.name.compareTo(b.name),
+    );
+  return groups;
+});
 final profileProvider = Provider(
   (ref) => ref.watch(appModelProvider.select((m) => m.profile)),
 );

@@ -55,11 +55,13 @@ extension JynEventPatterns on JynEvent {
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( JynEvent_River value)?  river,TResult Function( JynEvent_Profile value)?  profile,TResult Function( JynEvent_Friends value)?  friends,TResult Function( JynEvent_Diagnostics value)?  diagnostics,TResult Function( JynEvent_MediaReady value)?  mediaReady,TResult Function( JynEvent_MediaFailed value)?  mediaFailed,TResult Function( JynEvent_Error value)?  error,required TResult orElse(),}){
+@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( JynEvent_River value)?  river,TResult Function( JynEvent_Group value)?  group,TResult Function( JynEvent_GroupSuggestions value)?  groupSuggestions,TResult Function( JynEvent_Profile value)?  profile,TResult Function( JynEvent_Friends value)?  friends,TResult Function( JynEvent_Diagnostics value)?  diagnostics,TResult Function( JynEvent_MediaReady value)?  mediaReady,TResult Function( JynEvent_MediaFailed value)?  mediaFailed,TResult Function( JynEvent_Error value)?  error,required TResult orElse(),}){
 final _that = this;
 switch (_that) {
 case JynEvent_River() when river != null:
-return river(_that);case JynEvent_Profile() when profile != null:
+return river(_that);case JynEvent_Group() when group != null:
+return group(_that);case JynEvent_GroupSuggestions() when groupSuggestions != null:
+return groupSuggestions(_that);case JynEvent_Profile() when profile != null:
 return profile(_that);case JynEvent_Friends() when friends != null:
 return friends(_that);case JynEvent_Diagnostics() when diagnostics != null:
 return diagnostics(_that);case JynEvent_MediaReady() when mediaReady != null:
@@ -83,11 +85,13 @@ return error(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( JynEvent_River value)  river,required TResult Function( JynEvent_Profile value)  profile,required TResult Function( JynEvent_Friends value)  friends,required TResult Function( JynEvent_Diagnostics value)  diagnostics,required TResult Function( JynEvent_MediaReady value)  mediaReady,required TResult Function( JynEvent_MediaFailed value)  mediaFailed,required TResult Function( JynEvent_Error value)  error,}){
+@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( JynEvent_River value)  river,required TResult Function( JynEvent_Group value)  group,required TResult Function( JynEvent_GroupSuggestions value)  groupSuggestions,required TResult Function( JynEvent_Profile value)  profile,required TResult Function( JynEvent_Friends value)  friends,required TResult Function( JynEvent_Diagnostics value)  diagnostics,required TResult Function( JynEvent_MediaReady value)  mediaReady,required TResult Function( JynEvent_MediaFailed value)  mediaFailed,required TResult Function( JynEvent_Error value)  error,}){
 final _that = this;
 switch (_that) {
 case JynEvent_River():
-return river(_that);case JynEvent_Profile():
+return river(_that);case JynEvent_Group():
+return group(_that);case JynEvent_GroupSuggestions():
+return groupSuggestions(_that);case JynEvent_Profile():
 return profile(_that);case JynEvent_Friends():
 return friends(_that);case JynEvent_Diagnostics():
 return diagnostics(_that);case JynEvent_MediaReady():
@@ -107,11 +111,13 @@ return error(_that);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( JynEvent_River value)?  river,TResult? Function( JynEvent_Profile value)?  profile,TResult? Function( JynEvent_Friends value)?  friends,TResult? Function( JynEvent_Diagnostics value)?  diagnostics,TResult? Function( JynEvent_MediaReady value)?  mediaReady,TResult? Function( JynEvent_MediaFailed value)?  mediaFailed,TResult? Function( JynEvent_Error value)?  error,}){
+@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( JynEvent_River value)?  river,TResult? Function( JynEvent_Group value)?  group,TResult? Function( JynEvent_GroupSuggestions value)?  groupSuggestions,TResult? Function( JynEvent_Profile value)?  profile,TResult? Function( JynEvent_Friends value)?  friends,TResult? Function( JynEvent_Diagnostics value)?  diagnostics,TResult? Function( JynEvent_MediaReady value)?  mediaReady,TResult? Function( JynEvent_MediaFailed value)?  mediaFailed,TResult? Function( JynEvent_Error value)?  error,}){
 final _that = this;
 switch (_that) {
 case JynEvent_River() when river != null:
-return river(_that);case JynEvent_Profile() when profile != null:
+return river(_that);case JynEvent_Group() when group != null:
+return group(_that);case JynEvent_GroupSuggestions() when groupSuggestions != null:
+return groupSuggestions(_that);case JynEvent_Profile() when profile != null:
 return profile(_that);case JynEvent_Friends() when friends != null:
 return friends(_that);case JynEvent_Diagnostics() when diagnostics != null:
 return diagnostics(_that);case JynEvent_MediaReady() when mediaReady != null:
@@ -134,10 +140,12 @@ return error(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( List<RiverPost> posts,  List<GhostCard> ghosts)?  river,TResult Function( UserProfile profile)?  profile,TResult Function( List<FriendEntry> friends,  List<PendingFriendRequest> pending)?  friends,TResult Function( DiagnosticsSnapshot snapshot)?  diagnostics,TResult Function( String blobHash,  String path)?  mediaReady,TResult Function( String blobHash,  String errorMessage)?  mediaFailed,TResult Function( String context,  String message)?  error,required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( List<RiverPost> posts,  List<GhostCard> ghosts,  List<GroupDigestDoor> doors,  List<GroupDiscoveryCard> groupCards)?  river,TResult Function( GroupView view)?  group,TResult Function( List<GroupSuggestion> suggestions)?  groupSuggestions,TResult Function( UserProfile profile)?  profile,TResult Function( List<FriendEntry> friends,  List<PendingFriendRequest> pending)?  friends,TResult Function( DiagnosticsSnapshot snapshot)?  diagnostics,TResult Function( String blobHash,  String path)?  mediaReady,TResult Function( String blobHash,  String errorMessage)?  mediaFailed,TResult Function( String context,  String message)?  error,required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case JynEvent_River() when river != null:
-return river(_that.posts,_that.ghosts);case JynEvent_Profile() when profile != null:
+return river(_that.posts,_that.ghosts,_that.doors,_that.groupCards);case JynEvent_Group() when group != null:
+return group(_that.view);case JynEvent_GroupSuggestions() when groupSuggestions != null:
+return groupSuggestions(_that.suggestions);case JynEvent_Profile() when profile != null:
 return profile(_that.profile);case JynEvent_Friends() when friends != null:
 return friends(_that.friends,_that.pending);case JynEvent_Diagnostics() when diagnostics != null:
 return diagnostics(_that.snapshot);case JynEvent_MediaReady() when mediaReady != null:
@@ -161,10 +169,12 @@ return error(_that.context,_that.message);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( List<RiverPost> posts,  List<GhostCard> ghosts)  river,required TResult Function( UserProfile profile)  profile,required TResult Function( List<FriendEntry> friends,  List<PendingFriendRequest> pending)  friends,required TResult Function( DiagnosticsSnapshot snapshot)  diagnostics,required TResult Function( String blobHash,  String path)  mediaReady,required TResult Function( String blobHash,  String errorMessage)  mediaFailed,required TResult Function( String context,  String message)  error,}) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( List<RiverPost> posts,  List<GhostCard> ghosts,  List<GroupDigestDoor> doors,  List<GroupDiscoveryCard> groupCards)  river,required TResult Function( GroupView view)  group,required TResult Function( List<GroupSuggestion> suggestions)  groupSuggestions,required TResult Function( UserProfile profile)  profile,required TResult Function( List<FriendEntry> friends,  List<PendingFriendRequest> pending)  friends,required TResult Function( DiagnosticsSnapshot snapshot)  diagnostics,required TResult Function( String blobHash,  String path)  mediaReady,required TResult Function( String blobHash,  String errorMessage)  mediaFailed,required TResult Function( String context,  String message)  error,}) {final _that = this;
 switch (_that) {
 case JynEvent_River():
-return river(_that.posts,_that.ghosts);case JynEvent_Profile():
+return river(_that.posts,_that.ghosts,_that.doors,_that.groupCards);case JynEvent_Group():
+return group(_that.view);case JynEvent_GroupSuggestions():
+return groupSuggestions(_that.suggestions);case JynEvent_Profile():
 return profile(_that.profile);case JynEvent_Friends():
 return friends(_that.friends,_that.pending);case JynEvent_Diagnostics():
 return diagnostics(_that.snapshot);case JynEvent_MediaReady():
@@ -184,10 +194,12 @@ return error(_that.context,_that.message);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( List<RiverPost> posts,  List<GhostCard> ghosts)?  river,TResult? Function( UserProfile profile)?  profile,TResult? Function( List<FriendEntry> friends,  List<PendingFriendRequest> pending)?  friends,TResult? Function( DiagnosticsSnapshot snapshot)?  diagnostics,TResult? Function( String blobHash,  String path)?  mediaReady,TResult? Function( String blobHash,  String errorMessage)?  mediaFailed,TResult? Function( String context,  String message)?  error,}) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( List<RiverPost> posts,  List<GhostCard> ghosts,  List<GroupDigestDoor> doors,  List<GroupDiscoveryCard> groupCards)?  river,TResult? Function( GroupView view)?  group,TResult? Function( List<GroupSuggestion> suggestions)?  groupSuggestions,TResult? Function( UserProfile profile)?  profile,TResult? Function( List<FriendEntry> friends,  List<PendingFriendRequest> pending)?  friends,TResult? Function( DiagnosticsSnapshot snapshot)?  diagnostics,TResult? Function( String blobHash,  String path)?  mediaReady,TResult? Function( String blobHash,  String errorMessage)?  mediaFailed,TResult? Function( String context,  String message)?  error,}) {final _that = this;
 switch (_that) {
 case JynEvent_River() when river != null:
-return river(_that.posts,_that.ghosts);case JynEvent_Profile() when profile != null:
+return river(_that.posts,_that.ghosts,_that.doors,_that.groupCards);case JynEvent_Group() when group != null:
+return group(_that.view);case JynEvent_GroupSuggestions() when groupSuggestions != null:
+return groupSuggestions(_that.suggestions);case JynEvent_Profile() when profile != null:
 return profile(_that.profile);case JynEvent_Friends() when friends != null:
 return friends(_that.friends,_that.pending);case JynEvent_Diagnostics() when diagnostics != null:
 return diagnostics(_that.snapshot);case JynEvent_MediaReady() when mediaReady != null:
@@ -205,7 +217,7 @@ return error(_that.context,_that.message);case _:
 
 
 class JynEvent_River extends JynEvent {
-  const JynEvent_River({required final  List<RiverPost> posts, required final  List<GhostCard> ghosts}): _posts = posts,_ghosts = ghosts,super._();
+  const JynEvent_River({required final  List<RiverPost> posts, required final  List<GhostCard> ghosts, required final  List<GroupDigestDoor> doors, required final  List<GroupDiscoveryCard> groupCards}): _posts = posts,_ghosts = ghosts,_doors = doors,_groupCards = groupCards,super._();
   
 
  final  List<RiverPost> _posts;
@@ -222,6 +234,20 @@ class JynEvent_River extends JynEvent {
   return EqualUnmodifiableListView(_ghosts);
 }
 
+ final  List<GroupDigestDoor> _doors;
+ List<GroupDigestDoor> get doors {
+  if (_doors is EqualUnmodifiableListView) return _doors;
+  // ignore: implicit_dynamic_type
+  return EqualUnmodifiableListView(_doors);
+}
+
+ final  List<GroupDiscoveryCard> _groupCards;
+ List<GroupDiscoveryCard> get groupCards {
+  if (_groupCards is EqualUnmodifiableListView) return _groupCards;
+  // ignore: implicit_dynamic_type
+  return EqualUnmodifiableListView(_groupCards);
+}
+
 
 /// Create a copy of JynEvent
 /// with the given fields replaced by the non-null parameter values.
@@ -233,16 +259,16 @@ $JynEvent_RiverCopyWith<JynEvent_River> get copyWith => _$JynEvent_RiverCopyWith
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is JynEvent_River&&const DeepCollectionEquality().equals(other._posts, _posts)&&const DeepCollectionEquality().equals(other._ghosts, _ghosts));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is JynEvent_River&&const DeepCollectionEquality().equals(other._posts, _posts)&&const DeepCollectionEquality().equals(other._ghosts, _ghosts)&&const DeepCollectionEquality().equals(other._doors, _doors)&&const DeepCollectionEquality().equals(other._groupCards, _groupCards));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,const DeepCollectionEquality().hash(_posts),const DeepCollectionEquality().hash(_ghosts));
+int get hashCode => Object.hash(runtimeType,const DeepCollectionEquality().hash(_posts),const DeepCollectionEquality().hash(_ghosts),const DeepCollectionEquality().hash(_doors),const DeepCollectionEquality().hash(_groupCards));
 
 @override
 String toString() {
-  return 'JynEvent.river(posts: $posts, ghosts: $ghosts)';
+  return 'JynEvent.river(posts: $posts, ghosts: $ghosts, doors: $doors, groupCards: $groupCards)';
 }
 
 
@@ -253,7 +279,7 @@ abstract mixin class $JynEvent_RiverCopyWith<$Res> implements $JynEventCopyWith<
   factory $JynEvent_RiverCopyWith(JynEvent_River value, $Res Function(JynEvent_River) _then) = _$JynEvent_RiverCopyWithImpl;
 @useResult
 $Res call({
- List<RiverPost> posts, List<GhostCard> ghosts
+ List<RiverPost> posts, List<GhostCard> ghosts, List<GroupDigestDoor> doors, List<GroupDiscoveryCard> groupCards
 });
 
 
@@ -270,11 +296,151 @@ class _$JynEvent_RiverCopyWithImpl<$Res>
 
 /// Create a copy of JynEvent
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') $Res call({Object? posts = null,Object? ghosts = null,}) {
+@pragma('vm:prefer-inline') $Res call({Object? posts = null,Object? ghosts = null,Object? doors = null,Object? groupCards = null,}) {
   return _then(JynEvent_River(
 posts: null == posts ? _self._posts : posts // ignore: cast_nullable_to_non_nullable
 as List<RiverPost>,ghosts: null == ghosts ? _self._ghosts : ghosts // ignore: cast_nullable_to_non_nullable
-as List<GhostCard>,
+as List<GhostCard>,doors: null == doors ? _self._doors : doors // ignore: cast_nullable_to_non_nullable
+as List<GroupDigestDoor>,groupCards: null == groupCards ? _self._groupCards : groupCards // ignore: cast_nullable_to_non_nullable
+as List<GroupDiscoveryCard>,
+  ));
+}
+
+
+}
+
+/// @nodoc
+
+
+class JynEvent_Group extends JynEvent {
+  const JynEvent_Group({required this.view}): super._();
+  
+
+ final  GroupView view;
+
+/// Create a copy of JynEvent
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$JynEvent_GroupCopyWith<JynEvent_Group> get copyWith => _$JynEvent_GroupCopyWithImpl<JynEvent_Group>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is JynEvent_Group&&(identical(other.view, view) || other.view == view));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,view);
+
+@override
+String toString() {
+  return 'JynEvent.group(view: $view)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $JynEvent_GroupCopyWith<$Res> implements $JynEventCopyWith<$Res> {
+  factory $JynEvent_GroupCopyWith(JynEvent_Group value, $Res Function(JynEvent_Group) _then) = _$JynEvent_GroupCopyWithImpl;
+@useResult
+$Res call({
+ GroupView view
+});
+
+
+
+
+}
+/// @nodoc
+class _$JynEvent_GroupCopyWithImpl<$Res>
+    implements $JynEvent_GroupCopyWith<$Res> {
+  _$JynEvent_GroupCopyWithImpl(this._self, this._then);
+
+  final JynEvent_Group _self;
+  final $Res Function(JynEvent_Group) _then;
+
+/// Create a copy of JynEvent
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? view = null,}) {
+  return _then(JynEvent_Group(
+view: null == view ? _self.view : view // ignore: cast_nullable_to_non_nullable
+as GroupView,
+  ));
+}
+
+
+}
+
+/// @nodoc
+
+
+class JynEvent_GroupSuggestions extends JynEvent {
+  const JynEvent_GroupSuggestions({required final  List<GroupSuggestion> suggestions}): _suggestions = suggestions,super._();
+  
+
+ final  List<GroupSuggestion> _suggestions;
+ List<GroupSuggestion> get suggestions {
+  if (_suggestions is EqualUnmodifiableListView) return _suggestions;
+  // ignore: implicit_dynamic_type
+  return EqualUnmodifiableListView(_suggestions);
+}
+
+
+/// Create a copy of JynEvent
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$JynEvent_GroupSuggestionsCopyWith<JynEvent_GroupSuggestions> get copyWith => _$JynEvent_GroupSuggestionsCopyWithImpl<JynEvent_GroupSuggestions>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is JynEvent_GroupSuggestions&&const DeepCollectionEquality().equals(other._suggestions, _suggestions));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,const DeepCollectionEquality().hash(_suggestions));
+
+@override
+String toString() {
+  return 'JynEvent.groupSuggestions(suggestions: $suggestions)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $JynEvent_GroupSuggestionsCopyWith<$Res> implements $JynEventCopyWith<$Res> {
+  factory $JynEvent_GroupSuggestionsCopyWith(JynEvent_GroupSuggestions value, $Res Function(JynEvent_GroupSuggestions) _then) = _$JynEvent_GroupSuggestionsCopyWithImpl;
+@useResult
+$Res call({
+ List<GroupSuggestion> suggestions
+});
+
+
+
+
+}
+/// @nodoc
+class _$JynEvent_GroupSuggestionsCopyWithImpl<$Res>
+    implements $JynEvent_GroupSuggestionsCopyWith<$Res> {
+  _$JynEvent_GroupSuggestionsCopyWithImpl(this._self, this._then);
+
+  final JynEvent_GroupSuggestions _self;
+  final $Res Function(JynEvent_GroupSuggestions) _then;
+
+/// Create a copy of JynEvent
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? suggestions = null,}) {
+  return _then(JynEvent_GroupSuggestions(
+suggestions: null == suggestions ? _self._suggestions : suggestions // ignore: cast_nullable_to_non_nullable
+as List<GroupSuggestion>,
   ));
 }
 
