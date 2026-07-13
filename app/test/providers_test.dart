@@ -74,11 +74,15 @@ void main() {
       var model = const AppModel();
       model = applyEvent(
         model,
-        JynEvent.group(view: groupView(groupId: 'g1', name: 'reading circle')),
+        JynEvent.group(
+          view: groupView(groupId: 'g1', name: 'reading circle'),
+        ),
       );
       model = applyEvent(
         model,
-        JynEvent.group(view: groupView(groupId: 'g2', name: 'second group')),
+        JynEvent.group(
+          view: groupView(groupId: 'g2', name: 'second group'),
+        ),
       );
       model = applyEvent(
         model,
@@ -112,12 +116,7 @@ void main() {
       // A later river snapshot replaces the doors.
       model = applyEvent(
         model,
-        const JynEvent.river(
-          posts: [],
-          ghosts: [],
-          doors: [],
-          groupCards: [],
-        ),
+        const JynEvent.river(posts: [], ghosts: [], doors: [], groupCards: []),
       );
       expect(model.doors, isEmpty);
     });
@@ -148,9 +147,7 @@ void main() {
   group('group slice providers', () {
     test('myGroups lists member groups only, most recently active first', () {
       final container = ProviderContainer(
-        overrides: [
-          jynEventsProvider.overrideWithValue(const Stream.empty()),
-        ],
+        overrides: [jynEventsProvider.overrideWithValue(const Stream.empty())],
       );
       addTearDown(container.dispose);
       final notifier = container.read(appModelProvider.notifier);
@@ -161,11 +158,7 @@ void main() {
           viewerStatus: GroupViewerStatus.owner,
           latestActivityAt: 5,
         ),
-        groupView(
-          groupId: 'mine-busy',
-          name: 'busy',
-          latestActivityAt: 50,
-        ),
+        groupView(groupId: 'mine-busy', name: 'busy', latestActivityAt: 50),
         groupView(
           groupId: 'visited',
           name: 'visited',

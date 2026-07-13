@@ -69,7 +69,9 @@ class GroupsHubScreen extends ConsumerWidget {
                   ),
                   const SizedBox(height: 6),
                   for (final suggestion in suggestions)
-                    JynColumnItem(child: _SuggestionRow(suggestion: suggestion)),
+                    JynColumnItem(
+                      child: _SuggestionRow(suggestion: suggestion),
+                    ),
                 ],
               ],
             ),
@@ -129,7 +131,9 @@ class _GroupRow extends StatelessWidget {
                       [
                         groupModesLabel(group),
                         if (memberCount != null)
-                          memberCount == 1 ? '1 member' : '$memberCount members',
+                          memberCount == 1
+                              ? '1 member'
+                              : '$memberCount members',
                       ].join(' · '),
                       style: JynType.meta.copyWith(color: JynColors.muted),
                     ),
@@ -287,10 +291,7 @@ class _CreateGroupDialogState extends State<_CreateGroupDialog> {
             const SizedBox(height: 6),
             SegmentedButton<GroupJoinMode>(
               segments: const [
-                ButtonSegment(
-                  value: GroupJoinMode.open,
-                  label: Text('open'),
-                ),
+                ButtonSegment(value: GroupJoinMode.open, label: Text('open')),
                 ButtonSegment(
                   value: GroupJoinMode.request,
                   label: Text('request to join'),

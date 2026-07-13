@@ -184,22 +184,28 @@ final groupsProvider = Provider(
 
 /// One group's latest state, for the place and admin screens.
 final groupProvider = Provider.family<GroupView?, String>(
-  (ref, groupId) => ref.watch(groupsProvider.select((groups) => groups[groupId])),
+  (ref, groupId) =>
+      ref.watch(groupsProvider.select((groups) => groups[groupId])),
 );
 
 /// The Groups hub list: groups the local user belongs to, most recently
 /// active first.
 final myGroupsProvider = Provider<List<GroupView>>((ref) {
-  final groups = ref.watch(groupsProvider).values.where(
-    (view) =>
-        view.viewerStatus == GroupViewerStatus.owner ||
-        view.viewerStatus == GroupViewerStatus.member,
-  ).toList()
-    ..sort(
-      (a, b) => b.latestActivityAt != a.latestActivityAt
-          ? b.latestActivityAt.compareTo(a.latestActivityAt)
-          : a.name.compareTo(b.name),
-    );
+  final groups =
+      ref
+          .watch(groupsProvider)
+          .values
+          .where(
+            (view) =>
+                view.viewerStatus == GroupViewerStatus.owner ||
+                view.viewerStatus == GroupViewerStatus.member,
+          )
+          .toList()
+        ..sort(
+          (a, b) => b.latestActivityAt != a.latestActivityAt
+              ? b.latestActivityAt.compareTo(a.latestActivityAt)
+              : a.name.compareTo(b.name),
+        );
   return groups;
 });
 final profileProvider = Provider(

@@ -190,10 +190,7 @@ class _RequestsSection extends StatelessWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          request.requesterDisplayName,
-                          style: JynType.name,
-                        ),
+                        Text(request.requesterDisplayName, style: JynType.name),
                         if (request.greeting != null)
                           Text(
                             request.greeting!,

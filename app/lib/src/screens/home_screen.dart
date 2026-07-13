@@ -122,8 +122,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                         ),
                       // Digest doors sort into the reverse-chron river by
                       // the group's latest activity (ADR-0010).
-                      for (final (index, entry)
-                          in _riverEntries(posts, doors).indexed) ...[
+                      for (final (index, entry) in _riverEntries(
+                        posts,
+                        doors,
+                      ).indexed) ...[
                         if (index > 0)
                           const JynColumnItem(child: JynHairline(faint: true)),
                         JynColumnItem(
@@ -289,7 +291,11 @@ class _GroupHeartCard extends StatelessWidget {
           padding: const EdgeInsets.symmetric(vertical: 14),
           child: Row(
             children: [
-              const Icon(Icons.favorite_border, size: 20, color: JynColors.muted),
+              const Icon(
+                Icons.favorite_border,
+                size: 20,
+                color: JynColors.muted,
+              ),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(

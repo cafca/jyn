@@ -86,11 +86,11 @@ class _GroupPlaceBody extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final isMember = group.viewerStatus == GroupViewerStatus.owner ||
+    final isMember =
+        group.viewerStatus == GroupViewerStatus.owner ||
         group.viewerStatus == GroupViewerStatus.member;
     final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-    final posts =
-        group.posts.where((post) => !isExpired(post, now)).toList();
+    final posts = group.posts.where((post) => !isExpired(post, now)).toList();
 
     return Stack(
       children: [
@@ -191,16 +191,16 @@ class _GroupHeader extends ConsumerWidget {
         const SizedBox(width: 8),
         switch (group.viewerStatus) {
           GroupViewerStatus.nonMember => _HeaderAction(
-              label: group.joinMode == GroupJoinMode.open ? 'join' : 'request',
-              onTap: () => runGuarded(
-                context,
-                () => joinGroup(groupId: group.groupId, viaProfileIds: []),
-              ),
+            label: group.joinMode == GroupJoinMode.open ? 'join' : 'request',
+            onTap: () => runGuarded(
+              context,
+              () => joinGroup(groupId: group.groupId, viaProfileIds: []),
             ),
+          ),
           GroupViewerStatus.member => _HeaderAction(
-              label: 'leave',
-              onTap: () => _confirmLeave(context),
-            ),
+            label: 'leave',
+            onTap: () => _confirmLeave(context),
+          ),
           _ => const SizedBox.shrink(),
         },
       ],
@@ -296,7 +296,8 @@ class _GroupPostCardState extends ConsumerState<_GroupPostCard> {
     final post = widget.post;
     final myId = ref.watch(profileProvider)?.profileId;
     final isSelf = post.profileId == myId;
-    final isMember = group.viewerStatus == GroupViewerStatus.owner ||
+    final isMember =
+        group.viewerStatus == GroupViewerStatus.owner ||
         group.viewerStatus == GroupViewerStatus.member;
     final comments = group.comments
         .where((comment) => comment.postId == post.postId)
@@ -554,9 +555,7 @@ class _GroupComposerState extends ConsumerState<_GroupComposer> {
           ),
           const SizedBox(width: 8),
           JynToolbarIcon(
-            icon: _attachments.isEmpty
-                ? Icons.attach_file
-                : Icons.attachment,
+            icon: _attachments.isEmpty ? Icons.attach_file : Icons.attachment,
             tooltip: _attachments.isEmpty
                 ? 'attach'
                 : '${_attachments.length} attached',
