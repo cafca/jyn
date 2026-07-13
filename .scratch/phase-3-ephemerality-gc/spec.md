@@ -30,12 +30,23 @@ delays teardown, never prevents it. Posts I explicitly kept are unaffected —
 a keep is its own promise to retain, and it survives the original's expiry
 until I release it.
 
-The only thing that may linger is the tiny encrypted operation record
-itself, as **unreadable ciphertext** — physically removing it from the
-append-only log needs a storage-pruning capability the underlying protocol
-doesn't offer yet. Nothing decryptable survives: no image, no video, no
-readable text. That residue is undecryptable bytes, not a leak, and it is
-called out explicitly rather than hidden.
+The only thing that may linger is the **header** of the encrypted operation —
+metadata (author, sequence number, timestamp, payload size, payload hash,
+backlink, signature), never the ciphertext and never anything decryptable. The
+encrypted *payload* itself can be deleted: p2panda models a body as optional
+(`Operation.body: Option<Body>`) and the store exposes `delete_operation_payload`,
+which drops an operation's body while keeping its header, so the backlink chain
+and sync stay intact (validation references the header's `payload_hash`, not the
+body). Deleting the payload is therefore safe from any position in the log —
+what would break the chain is deleting a *header* from the middle, which we
+never need to do. So no image, no video, no readable text, and no ciphertext
+survives; the residue is header metadata, called out explicitly rather than
+hidden.
+
+(Payload deletion is now implemented: teardown calls `delete_operation_payload`
+on an expired/deleted post's content-bearing wrapper op(s), so the ciphertext is
+erased alongside the decrypted-plaintext purge + media teardown. The first Phase
+3 cut shipped without it; it landed as the strict strengthening described here.)
 
 ## User Stories
 
@@ -93,9 +104,11 @@ called out explicitly rather than hidden.
 
 ### Honesty and unchanged behaviour
 
-15. As a privacy-conscious user, I want a clear, honest statement that the
-    encrypted operation record may persist as unreadable ciphertext, so that
-    I understand exactly what "gone" guarantees and what it doesn't.
+15. As a privacy-conscious user, I want a clear, honest statement of exactly
+    what "gone" guarantees: media and readable text are deleted, the encrypted
+    payload can be deleted too, and at most a small operation *header*
+    (metadata, no content) may remain — so I understand what does and doesn't
+    survive.
 16. As a user with expired public posts, I want the app to keep behaving as
     it does today (expired public posts simply stop showing), so that this
     change doesn't unexpectedly alter public-post behavior.
@@ -151,14 +164,22 @@ called out explicitly rather than hidden.
   post's feed pins; it additionally purges the decrypted-plaintext cache row,
   so delete and expiry converge on the same end state.
 
-- **We do not remove the encrypted operation from the log.** The underlying
-  append-only log has no prune/truncate/delete primitive. Per-post logs
-  (which would let expiry drop a whole log) explode the log/topic count, and
-  deleting an operation from the middle of a log breaks the backlink chain
-  and sync. So the encrypted operation record persists as undecryptable
-  ciphertext; true erasure is deferred to a future protocol-level log-prune
-  capability (tracked separately as an upstream ask). No jyn-side schema
-  change is required for Phase 3.
+- **Phase 3 now deletes the ciphertext payload of expired/deleted posts (shipped
+  after the first cut).** Teardown's shared helper `erase_post_content` drops the
+  payload (body) of a post's content-bearing (`PostPublished`/`PostEdited`)
+  wrapper op(s) via the store's `delete_operation_payload`, which keeps the header
+  — so the backlink chain and sync stay intact (validation is against the header's
+  `payload_hash`, and a body-less operation is a valid, modeled state that
+  `operations_for_profile` now skips). Tombstone/lifetime wrapper bodies are kept
+  so reduction still reflects delete/promote. This is distinct from removing the
+  whole operation (header included) from the middle of a log, which *would* break
+  the next operation's backlink; that is the thing we never do, and it is
+  unnecessary, because deleting the payload already erases the ciphertext. No
+  jyn-side schema change was required. Note: `p2panda-core`'s `PruneFlag`
+  (network-wide *prefix* GC via `p2panda-stream`) is a separate, coarser tool — it
+  drops everything before a point, so it does not map to deleting one expired post
+  from the middle; per-operation `delete_operation_payload` is the right primitive
+  there.
 
 - **We do not test, drive, or wait on the underlying store's asynchronous
   garbage collector.** jyn's responsibility ends at removing the GC root (the
@@ -205,10 +226,27 @@ called out explicitly rather than hidden.
 
 ## Out of Scope
 
-- **Erasing the encrypted operation record from the log.** Requires a
-  protocol-level log-prune primitive that does not exist; deferred and
-  tracked as an upstream ask. Expired *bodies* remain as undecryptable
-  ciphertext until then — a documented limitation, not a leak.
+- **Deleting the ciphertext payload of expired operations — DONE (shipped after
+  the first cut).** Both changes landed: (a) `erase_post_content` (the shared
+  teardown helper called by both the author- and recipient-side paths) calls
+  `delete_operation_payload` on an expired/deleted post's content-bearing
+  (`PostPublished`/`PostEdited`) `Spaces` wrapper op(s), scoped by
+  `content_post_id()` so tombstone/lifetime bodies are left intact for reduction;
+  (b) `operations_for_profile` now skips a body-less operation instead of erroring
+  (the old `body.context("payload is missing")?` became a `let Some(body) = … else
+  { continue }`). Both network-wide concerns were resolved, so no re-acceptance
+  gate was needed: sync will *not* re-materialize a deleted body — `ingest_operation`
+  early-returns on `has_operation`, which matches by row regardless of body — and a
+  drained peer serving a body-less op to a fresh peer is protocol-native (LogSync
+  models `Body` as optional and ingest validates backlinks, not `payload_hash`), so
+  the fresh peer receives header-only metadata. Convergence rides on the per-device
+  drain, exactly as recipient teardown does.
+- **Erasing the operation *header* / metadata.** Removing a header from the
+  middle of a log breaks the next operation's backlink and sync, and is
+  unnecessary for confidentiality — the header carries no readable content and
+  no ciphertext, only metadata (author, seq, timestamp, size, `payload_hash`,
+  backlink, signature). This residue is out of scope and, unlike the payload, is
+  a genuine protocol-level constraint.
 - **Reshare and reshare-by-reference dedup.** There is no reshare feature in
   the product today, so the by-reference dedup optimization has nothing to
   attach to. Descoped; the design is recorded under Further Notes for
@@ -234,11 +272,18 @@ called out explicitly rather than hidden.
   several posts (original + reshares) is reclaimed only when the last
   referencing post is torn down.
 
-- **Ciphertext-op pruning as an upstream ask.** The deferred log-prune
-  capability is a scoped protocol-level request, analogous to the
-  visible-cone auth-scoping change already contributed upstream. Until it
-  lands, the honest user-facing statement is: expired media and readable
-  text are gone; the encrypted record persists as unreadable bytes.
+- **Ciphertext-payload deletion is available today (correction).** An earlier
+  draft of this spec treated log pruning as a missing upstream capability. That
+  was wrong: p2panda already exposes `delete_operation_payload` (drop a body,
+  keep the header — chain-safe) and `PruneFlag` (network-wide prefix GC via
+  `p2panda-stream`). So there was no upstream ask blocking ciphertext erasure;
+  the first Phase 3 cut left ciphertext in place purely for scoping, and payload
+  deletion has since shipped (see Out of Scope). The accurate user-facing
+  statement is: expired media and readable text are gone, and the encrypted
+  payload is erased too — what may remain is operation-header metadata, not
+  content. Confirmed against `p2panda-store`
+  (`operations/traits.rs`, `operations/sqlite.rs`) and `p2panda-core`
+  (`operation.rs`, `prune.rs`) on 2026-07-13.
 
 - **Threat-model honesty.** `keep_post` intentionally lets any recipient
   retain a permanent private copy, so cryptographic ephemerality against

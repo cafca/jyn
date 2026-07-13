@@ -14,8 +14,6 @@
 //! only until its remaining dependents are ported.
 
 use std::collections::{HashMap, HashSet};
-use std::fs;
-use std::path::Path;
 
 use anyhow::{Context, Result};
 use p2panda_core::cbor::{decode_cbor, encode_cbor};
@@ -23,6 +21,7 @@ use p2panda_core::timestamp::HybridTimestamp;
 use p2panda_core::Topic;
 use p2panda_core::{Body, Extension, Hash, Header, Operation, SigningKey, VerifyingKey};
 use p2panda_store::logs::LogStore;
+use p2panda_store::operations::OperationStore;
 use p2panda_store::topics::TopicStore;
 use p2panda_store::{SqliteError, SqliteStore, Transaction};
 use p2panda_stream::ingest::ingest_operation;
@@ -32,8 +31,6 @@ use tracing::warn;
 // v2: the group-encryption flag day. Old plaintext clients stay on v1 topics
 // and never exchange operations with encrypted ones.
 const DOMAIN_TOPIC_NAMESPACE: &[u8] = b"jyn/domain/v2";
-const REDUCED_PROFILE_STATE_VERSION: u8 = 1;
-const DOMAIN_OPERATION_CACHE_VERSION: u8 = 1;
 
 /// Reach of a post, chosen by its author.
 ///
@@ -283,6 +280,19 @@ impl DomainOperation {
         }
     }
 
+    /// The post whose readable body this operation carries, if any. Only the
+    /// content-bearing post ops qualify: teardown erases these — both the
+    /// decrypted cache row and the encrypted payload — so an expired or deleted
+    /// post's content cannot be recovered from disk. Tombstones and lifetime
+    /// changes are deliberately excluded so their bodies survive and reduction
+    /// still sees the delete/promote after teardown.
+    fn content_post_id(&self) -> Option<&str> {
+        match self {
+            Self::PostPublished { post_id, .. } | Self::PostEdited { post_id, .. } => Some(post_id),
+            _ => None,
+        }
+    }
+
     fn log_kind(&self) -> DomainLogKind {
         match self {
             Self::ProfileUpdated { .. } => DomainLogKind::Profile,
@@ -387,25 +397,6 @@ pub struct StoredDomainOperation {
     pub log_id: DomainLogId,
     pub header: Header<DomainExtensions>,
     pub operation: DomainOperation,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct PersistedReducedProfileState {
-    version: u8,
-    state: ReducedProfileState,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-struct PersistedDomainOperations {
-    version: u8,
-    operations: Vec<StoredRawDomainOperation>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-struct StoredRawDomainOperation {
-    header: Header<DomainExtensions>,
-    #[serde(with = "serde_bytes")]
-    body: Vec<u8>,
 }
 
 /// Profile-oriented view onto the store's topic associations.
@@ -849,9 +840,15 @@ impl JynOperationDomain {
 
                 for (operation, _header_bytes) in entries {
                     let operation: Operation<DomainExtensions> = operation;
-                    let body = operation
-                        .body
-                        .context("domain operation payload is missing")?;
+                    // A body-less operation is a valid, modeled state: teardown
+                    // deletes the ciphertext payload of an expired or deleted
+                    // post's content op, leaving a header-only record. It carries
+                    // nothing to reduce (its decrypted cache row is purged in the
+                    // same teardown), so skip it rather than erroring on the
+                    // missing body.
+                    let Some(body) = operation.body else {
+                        continue;
+                    };
                     let mut domain_operation =
                         decode_cbor::<DomainOperation, _>(&body.to_bytes()[..])
                             .context("failed to decode domain body")?;
@@ -944,6 +941,66 @@ impl JynOperationDomain {
         .context("failed to store decrypted spaces operation")?;
         Ok(())
     }
+
+    /// Erases the content of an expired or deleted non-public post's
+    /// content-bearing operations so it cannot be recovered from local storage:
+    /// for each `PostPublished`/`PostEdited` wrapper op it deletes both the
+    /// locally-cached decrypted row *and* the encrypted payload (body) of the
+    /// stored operation.
+    ///
+    /// Dropping the payload is chain-safe from any position in the log: the
+    /// header — carrying the `payload_hash`, backlink and signature — is kept,
+    /// so backlink validation and sync are unaffected, and a body-less operation
+    /// is a modeled state that reduction skips (see `operations_for_profile`).
+    /// This is distinct from removing a whole operation (header included), which
+    /// would break the next operation's backlink and is never done. What remains
+    /// after teardown is header-only metadata, no content and no ciphertext.
+    ///
+    /// Tombstone and lifetime-change wrappers are deliberately left whole — both
+    /// their decrypted rows and their payloads — so reduction still reflects the
+    /// delete/promote after teardown. Idempotent (re-running skips ops whose
+    /// payload is already gone) — returns how many ops it erased. `profile_id`
+    /// scopes the walk to that author's own logs.
+    pub async fn erase_post_content(&self, profile_id: &str, post_id: &str) -> Result<usize> {
+        let mut erased = 0;
+        for operation in self.operations_for_profile_raw(profile_id).await? {
+            // Only Spaces wrappers ever have a decrypted row / content to erase;
+            // an already-erased op is body-less and skipped here.
+            let Some(body) = &operation.body else {
+                continue;
+            };
+            if !matches!(
+                decode_cbor::<DomainOperation, _>(&body.to_bytes()[..]),
+                Ok(DomainOperation::Spaces { .. })
+            ) {
+                continue;
+            }
+            if let Some(inner) = self.decrypted_inner_operation(&operation.hash).await? {
+                if inner.content_post_id() == Some(post_id) {
+                    self.delete_decrypted_inner_operation(&operation.hash).await?;
+                    // Drop the ciphertext body too, so the encrypted payload
+                    // cannot be recovered either — only the header survives.
+                    <SqliteStore as OperationStore<Operation<DomainExtensions>, Hash>>::delete_operation_payload(
+                        &self.store,
+                        &operation.hash,
+                    )
+                    .await
+                    .map_err(|err| anyhow::anyhow!("failed to delete operation payload: {err}"))?;
+                    erased += 1;
+                }
+            }
+        }
+        Ok(erased)
+    }
+
+    async fn delete_decrypted_inner_operation(&self, op_hash: &Hash) -> Result<()> {
+        sqlx::query("DELETE FROM jyn_spaces_decrypted WHERE op_hash = ?")
+            .bind(op_hash.to_string())
+            .execute(self.store.pool())
+            .await
+            .context("failed to delete decrypted spaces operation")?;
+        Ok(())
+    }
 }
 
 /// Creates jyn's own bookkeeping tables for group encryption (decrypted
@@ -1025,120 +1082,6 @@ fn next_ordering_timestamp(previous: Option<HybridTimestamp>) -> HybridTimestamp
         }
         _ => now,
     }
-}
-
-pub fn write_reduced_profile_state_to_path(
-    path: impl AsRef<Path>,
-    state: &ReducedProfileState,
-) -> Result<()> {
-    let persisted = PersistedReducedProfileState {
-        version: REDUCED_PROFILE_STATE_VERSION,
-        state: state.clone(),
-    };
-    write_json_atomic(path.as_ref(), &persisted, "reduced profile cache")
-}
-
-pub fn load_reduced_profile_state_from_path(path: impl AsRef<Path>) -> Result<ReducedProfileState> {
-    let path = path.as_ref();
-    let bytes = fs::read(path)
-        .with_context(|| format!("failed to read reduced profile cache {}", path.display()))?;
-    let persisted: PersistedReducedProfileState = serde_json::from_slice(&bytes)
-        .with_context(|| format!("failed to parse reduced profile cache {}", path.display()))?;
-    if persisted.version != REDUCED_PROFILE_STATE_VERSION {
-        anyhow::bail!(
-            "unsupported reduced profile cache version {} in {}",
-            persisted.version,
-            path.display()
-        );
-    }
-    Ok(persisted.state)
-}
-
-pub fn load_raw_domain_operations_from_path(
-    path: impl AsRef<Path>,
-) -> Result<Vec<Operation<DomainExtensions>>> {
-    let path = path.as_ref();
-    let bytes = fs::read(path)
-        .with_context(|| format!("failed to read domain operation cache {}", path.display()))?;
-    let persisted: PersistedDomainOperations = serde_json::from_slice(&bytes)
-        .with_context(|| format!("failed to parse domain operation cache {}", path.display()))?;
-    if persisted.version != DOMAIN_OPERATION_CACHE_VERSION {
-        anyhow::bail!(
-            "unsupported domain operation cache version {} in {}",
-            persisted.version,
-            path.display()
-        );
-    }
-    persisted
-        .operations
-        .into_iter()
-        .map(|operation| {
-            let validated = Operation {
-                hash: operation.header.hash(),
-                header: operation.header,
-                body: Some(Body::from(operation.body)),
-            };
-            p2panda_core::validate_operation(&validated)
-                .context("cached domain operation validation failed")?;
-            Ok(validated)
-        })
-        .collect()
-}
-
-pub fn write_raw_domain_operations_to_path(
-    path: impl AsRef<Path>,
-    operations: impl IntoIterator<Item = Operation<DomainExtensions>>,
-) -> Result<()> {
-    let operations = operations
-        .into_iter()
-        .map(|operation| {
-            let body = operation
-                .body
-                .context("domain operation is missing a body while persisting cache")?;
-            Ok(StoredRawDomainOperation {
-                header: operation.header,
-                body: body.to_bytes(),
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
-
-    let persisted = PersistedDomainOperations {
-        version: DOMAIN_OPERATION_CACHE_VERSION,
-        operations,
-    };
-    write_json_atomic(path.as_ref(), &persisted, "domain operation cache")
-}
-
-fn write_json_atomic<T: Serialize>(path: &Path, value: &T, label: &str) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).with_context(|| {
-            format!(
-                "failed to create parent directory for {} at {}",
-                label,
-                parent.display()
-            )
-        })?;
-    }
-
-    let bytes =
-        serde_json::to_vec_pretty(value).with_context(|| format!("failed to serialize {label}"))?;
-    let tmp_path = path.with_extension("json.tmp");
-    fs::write(&tmp_path, bytes).with_context(|| {
-        format!(
-            "failed to write temporary {} file {}",
-            label,
-            tmp_path.display()
-        )
-    })?;
-    fs::rename(&tmp_path, path).with_context(|| {
-        format!(
-            "failed to atomically move temporary {} file {} to {}",
-            label,
-            tmp_path.display(),
-            path.display()
-        )
-    })?;
-    Ok(())
 }
 
 #[cfg(test)]
@@ -1325,6 +1268,86 @@ mod tests {
             .expect("state exists");
         assert!(state.posts.is_empty());
         assert!(state.is_tombstoned("post-a"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn erasing_content_removes_a_non_public_post_from_disk() -> Result<()> {
+        let key = SigningKey::generate();
+        let profile_id = key.verifying_key().to_string();
+        let store = SqliteStore::temporary().await;
+        ensure_spaces_tables(&store).await?;
+        let mut domain = JynOperationDomain::new(store.clone());
+
+        // A non-public post arrives as an encrypted Spaces wrapper whose
+        // decrypted inner op the spaces service cached so reduction can read it.
+        let wrapper = domain
+            .append_operation(
+                &key,
+                DomainOperation::Spaces {
+                    profile_id: profile_id.clone(),
+                    args: vec![0xde, 0xad],
+                },
+            )
+            .await?;
+        let wrapper_hash = wrapper.hash();
+        domain
+            .store_decrypted_inner_operation(
+                &wrapper_hash,
+                &text_post(&profile_id, "post-x", "sealed words", Some(100), 10),
+            )
+            .await?;
+
+        // Before teardown: reduction reconstructs the post through the cached
+        // decrypted row, and the row is retrievable.
+        let state = domain
+            .read_profile_state(&profile_id)
+            .await?
+            .expect("state exists");
+        assert!(state
+            .posts
+            .iter()
+            .any(|post| post.post_id == "post-x" && post.body == "sealed words"));
+        assert!(domain
+            .decrypted_inner_operation(&wrapper_hash)
+            .await?
+            .is_some());
+
+        // Teardown erases both the readable text and the encrypted payload.
+        let erased = domain.erase_post_content(&profile_id, "post-x").await?;
+        assert_eq!(erased, 1);
+
+        // The decrypted inner op is gone, so the post can no longer be
+        // reconstructed from disk.
+        assert!(domain
+            .decrypted_inner_operation(&wrapper_hash)
+            .await?
+            .is_none());
+
+        // The ciphertext payload is gone too: the wrapper op's body is now None,
+        // leaving only header-only metadata in the log.
+        let raw = domain.operations_for_profile_raw(&profile_id).await?;
+        let torn_down = raw
+            .iter()
+            .find(|op| op.hash == wrapper_hash)
+            .expect("wrapper op still present as a header");
+        assert!(
+            torn_down.body.is_none(),
+            "the encrypted payload should be deleted"
+        );
+
+        // Reduction tolerates the body-less op (skips it) rather than erroring,
+        // and the post is absent from reconstructed state.
+        let state = domain.read_profile_state(&profile_id).await?;
+        assert!(state.is_none_or(|state| state
+            .posts
+            .iter()
+            .all(|post| post.post_id != "post-x")));
+
+        // Idempotent: a second teardown erases nothing (the op is already
+        // body-less and skipped).
+        assert_eq!(domain.erase_post_content(&profile_id, "post-x").await?, 0);
 
         Ok(())
     }

@@ -214,6 +214,30 @@ impl JynSyncService {
         self.domain.read_profile_state(profile_id).await
     }
 
+    /// Erases the content of an expired or deleted non-public post so it cannot
+    /// be recovered from disk: both the locally-cached decrypted text and the
+    /// encrypted payload (body) of the stored operation are removed, leaving
+    /// only header-only metadata in the log.
+    pub(crate) async fn erase_post_content(&self, profile_id: &str, post_id: &str) -> Result<usize> {
+        self.domain.erase_post_content(profile_id, post_id).await
+    }
+
+    /// Profiles whose posts this device receives — direct friends plus
+    /// friends-of-friends (circle members) — mirroring the set
+    /// `process_spaces_backlog` decrypts. Used by recipient-side expiry
+    /// teardown to walk received posts. Excludes self; sorted and deduped.
+    pub(crate) async fn contact_profile_ids(&self) -> Result<Vec<String>> {
+        let mut profiles = Vec::new();
+        if let Some(own) = self.read_profile_state(&self.local_profile_id).await? {
+            profiles.extend(own.followed_profile_ids);
+        }
+        profiles.extend(derive_circle_members(&self.domain, &self.local_profile_id).await?);
+        profiles.retain(|id| id != &self.local_profile_id);
+        profiles.sort();
+        profiles.dedup();
+        Ok(profiles)
+    }
+
     /// Encrypts a domain operation to one of our own spaces and pushes the
     /// resulting wrapper operations into live sync.
     ///
