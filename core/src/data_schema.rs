@@ -21,7 +21,14 @@ use tracing::{info, warn};
 /// migrated. The sync topic namespace moved to `jyn/domain/v2`, so pre-v3
 /// clients never even share topics with encrypted ones. The identity keypair
 /// survives: profile ids and friend codes stay stable, friendships re-form.
-pub const DATA_SCHEMA_VERSION: u32 = 3;
+/// v4: co-deletion logs flag day (docs/adr/0016-logs-are-expiry-keyed-co-deletion-units.md).
+/// Logs are now opaque expiry-keyed buckets instead of six fixed semantic
+/// logs, and the operation header carries an `audience` field the sync topic
+/// derives from. Both the on-disk log addressing and the header layout change
+/// incompatibly, so stores are wiped; the topic namespace moved to
+/// `jyn/domain/v3` so pre-v4 clients never share topics. The identity keypair
+/// survives, as in every prior flag day.
+pub const DATA_SCHEMA_VERSION: u32 = 4;
 
 const SCHEMA_VERSION_FILE: &str = "schema.version";
 

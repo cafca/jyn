@@ -1443,6 +1443,7 @@ async fn publish_post(
         visibility: draft.visibility,
         expires_at,
         created_at: now,
+        edited: false,
     };
     let mut sync = state.sync.lock().await;
     if draft.visibility == Visibility::Public {
@@ -1689,25 +1690,66 @@ async fn set_post_lifetime(
         return Ok(());
     }
 
-    let Some(visibility) = post_visibility(state, &state.local_profile_id, &post_id).await? else {
+    // Changing a lifetime changes a post's bucket, so we re-home it (ADR-0016):
+    // publish a self-contained snapshot of its current state into the new
+    // bucket and disown the old copy with a re-home marker. Reduction dedupes
+    // by post id (newest ordering wins), so the snapshot supersedes every
+    // earlier copy while GC can later drop the old bucket cleanly.
+    let Some(post) = current_local_post(state, &post_id).await? else {
         // Post already gone from our reduced state (deleted, or expired and
-        // torn down). Nothing to re-lifetime, and a plaintext fallback publish
-        // would leak a lifetime-change op for what was an encrypted post.
+        // torn down). Nothing to re-home, and a plaintext fallback publish
+        // would leak an op for what was an encrypted post.
         return Ok(());
     };
-    let operation = DomainOperation::PostLifetimeChanged {
+    if post.expires_at == expires_at {
+        return Ok(());
+    }
+    let now = now_unix_secs();
+    let visibility = post.visibility;
+    let rehomed = DomainOperation::PostRehomed {
+        profile_id: state.local_profile_id.clone(),
+        post_id: post_id.clone(),
+        moved_at: now,
+    };
+    let snapshot = DomainOperation::PostPublished {
         profile_id: state.local_profile_id.clone(),
         post_id,
+        body: post.body,
+        media: post.media,
+        visibility,
         expires_at,
-        changed_at: now_unix_secs(),
+        created_at: post.created_at,
+        edited: post.edited,
     };
+
     let mut sync = state.sync.lock().await;
     if visibility == Visibility::Public {
-        sync.publish(operation).await
+        // Marker first, while the old copy is still the post's current one, so
+        // it is placed into the old bucket; then the snapshot into the new one.
+        sync.publish(rehomed).await?;
+        sync.publish(snapshot).await
     } else {
-        sync.publish_encrypted(operation, space_kind_for(visibility))
+        sync.publish_encrypted(rehomed, space_kind_for(visibility))
+            .await?;
+        sync.publish_encrypted(snapshot, space_kind_for(visibility))
             .await
     }
+}
+
+/// The author's own current copy of a post from reduced state, or `None` if
+/// it is no longer present (deleted, or expired and torn down).
+async fn current_local_post(
+    state: &RuntimeState,
+    post_id: &str,
+) -> Result<Option<crate::domain::ReducedPost>> {
+    let sync = state.sync.lock().await;
+    let own_state = sync.read_profile_state(&state.local_profile_id).await?;
+    Ok(own_state.and_then(|reduced| {
+        reduced
+            .posts
+            .into_iter()
+            .find(|post| post.post_id == post_id)
+    }))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1754,6 +1796,29 @@ async fn update_profile(
 
 async fn drain_expired(state: &RuntimeState, event_tx: &Sender<NetworkEvent>) -> Result<()> {
     let now = now_unix_secs();
+
+    // GC's dead-post set, captured *before* teardown erases expired posts from
+    // reduced state (ADR-0016): the pairs whose posts are tombstoned or expired
+    // across everyone we know. Reaction reaping and bucket dropping both key off
+    // this, so it must reflect posts that are about to be torn down this pass.
+    let gc_profiles: Vec<String> = {
+        let sync = state.sync.lock().await;
+        let mut profiles = vec![state.local_profile_id.clone()];
+        profiles.extend(sync.contact_profile_ids().await.unwrap_or_default());
+        profiles.sort();
+        profiles.dedup();
+        profiles
+    };
+    let dead_targets = {
+        let sync = state.sync.lock().await;
+        sync.dead_post_targets(&gc_profiles, now)
+            .await
+            .unwrap_or_else(|err| {
+                tracing::warn!("failed to compute GC dead-post set: {err:#}");
+                Default::default()
+            })
+    };
+
     let drained = state.private_posts.drain_expired(now)?;
     if !drained.is_empty() {
         for post in &drained {
@@ -1868,7 +1933,58 @@ async fn drain_expired(state: &RuntimeState, event_tx: &Sender<NetworkEvent>) ->
             emit_keeps(state, event_tx)?;
         }
     }
+
+    // GC of the co-deletion structure (ADR-0016), after per-post teardown:
+    // (1) reap reactions whose target post is dead — on our own topic and each
+    //     contact's, so both our reactions and received ones leave with the
+    //     post they were on, even though they live in their own month buckets;
+    // (2) drop fully-drained bucket logs whole — prune their operations and
+    //     un-announce them so expired buckets stop syncing — then reclaim the
+    //     pins and cache of anything they freed. Runs on the same drain path as
+    //     everything else, so an offline device converges on next start.
+    for holder in &gc_profiles {
+        let reaped = {
+            let sync = state.sync.lock().await;
+            sync.reap_reactions_for_dead_targets(holder, &dead_targets)
+                .await
+        };
+        if let Err(err) = reaped {
+            tracing::warn!("failed to reap reactions on {holder}: {err:#}");
+        }
+    }
+
+    for topic_profile_id in &gc_profiles {
+        let freed = {
+            let sync = state.sync.lock().await;
+            sync.drop_drained_buckets(topic_profile_id, now, &dead_targets)
+                .await
+        };
+        match freed {
+            Ok(freed) => reclaim_dropped_content(state, freed).await,
+            Err(err) => {
+                tracing::warn!("failed to drop drained buckets on {topic_profile_id}: {err:#}")
+            }
+        }
+    }
+
     Ok(())
+}
+
+/// Reclaims the blob pins and materialized cache of content whose bucket log GC
+/// just dropped: unpins each freed post's `feed/…` namespace, and prunes the
+/// cache of every freed blob and stops serving it (so a recipient's dropped
+/// ciphertext leaves this device too). A blob still held by a keep survives —
+/// its pin lives under a separate `keep/…` namespace. Best-effort.
+async fn reclaim_dropped_content(state: &RuntimeState, freed: crate::domain::DrainedContent) {
+    for post_id in &freed.post_ids {
+        unpin_and_prune_prefix(state, &format!("feed/{post_id}/")).await;
+    }
+    for blob_hash in &freed.blob_hashes {
+        crate::media::prune_cached(&state.media_cache_dir, blob_hash);
+        if let Ok(hash) = blob_hash.parse::<p2panda_blobs::Hash>() {
+            state.node.blobs.block_serving_hashes([hash]);
+        }
+    }
 }
 
 async fn collect_diagnostics_snapshot(state: &RuntimeState) -> Result<DiagnosticsSnapshot> {
