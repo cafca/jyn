@@ -29,7 +29,7 @@ use p2panda_sync::protocols::TopicLogSyncEvent;
 
 use crate::bridge::NetworkEvent;
 use crate::domain::{
-    DomainExtensions, DomainLogId, DomainOperation, JynOperationDomain, JynTopicMap,
+    profile_sync_topic, DomainExtensions, DomainLogId, DomainOperation, JynOperationDomain,
     ReducedProfileState, Visibility,
 };
 use crate::node::AppNode;
@@ -56,7 +56,6 @@ struct ContactSync {
 
 pub(crate) struct JynSyncService {
     store: DomainStore,
-    topic_map: JynTopicMap,
     domain: JynOperationDomain,
     log_sync: DomainSync,
     local_handle: std::sync::Arc<DomainSyncHandle>,
@@ -80,12 +79,12 @@ impl JynSyncService {
         let local_profile_id = local_profile_id.into();
         let local_private_key = load_private_key_from_data_dir(&node.data_dir)?;
         let store = open_domain_store(&node.data_dir).await?;
-        let topic_map = JynTopicMap::new(store.clone());
         let domain = JynOperationDomain::new(store.clone());
 
-        let topic = topic_map
-            .register_profile_author(&local_profile_id, local_private_key.verifying_key())
-            .await;
+        // Logs associate with this topic as operations are ingested (ADR-0016);
+        // there is no fixed set of logs to pre-register. Our own logs stay
+        // associated across restarts because association is persisted at ingest.
+        let topic = profile_sync_topic(&local_profile_id);
         node.address_book
             .add_topic(node.node_id(), topic)
             .await
@@ -130,7 +129,6 @@ impl JynSyncService {
 
         let service = Self {
             store,
-            topic_map,
             domain,
             log_sync,
             local_handle,
@@ -179,7 +177,7 @@ impl JynSyncService {
             .domain
             .append_operation(&self.local_private_key, operation)
             .await?;
-        let target_profile_id = header.extensions.log_id.profile_id.clone();
+        let target_profile_id = header.extensions.audience.clone();
         let operation = Operation {
             hash: header.hash(),
             header,
@@ -220,6 +218,41 @@ impl JynSyncService {
     /// only header-only metadata in the log.
     pub(crate) async fn erase_post_content(&self, profile_id: &str, post_id: &str) -> Result<usize> {
         self.domain.erase_post_content(profile_id, post_id).await
+    }
+
+    /// The `(post_author, post_id)` pairs across the given profiles whose posts
+    /// are dead (tombstoned or expired) at `now` — GC's authority on which
+    /// reactions may be reaped and which buckets may drop (ADR-0016).
+    pub(crate) async fn dead_post_targets(
+        &self,
+        profile_ids: &[String],
+        now: u64,
+    ) -> Result<std::collections::HashSet<(String, String)>> {
+        self.domain.dead_post_targets(profile_ids, now).await
+    }
+
+    /// Reaps this holder's reactions whose target post is dead (payload-erase).
+    pub(crate) async fn reap_reactions_for_dead_targets(
+        &self,
+        holder_profile_id: &str,
+        dead: &std::collections::HashSet<(String, String)>,
+    ) -> Result<usize> {
+        self.domain
+            .reap_reactions_for_dead_targets(holder_profile_id, dead)
+            .await
+    }
+
+    /// Drops fully-drained bucket logs on a topic (prune + un-announce),
+    /// returning the post ids and blob hashes freed for pin/cache reclaim.
+    pub(crate) async fn drop_drained_buckets(
+        &self,
+        topic_profile_id: &str,
+        now: u64,
+        dead: &std::collections::HashSet<(String, String)>,
+    ) -> Result<crate::domain::DrainedContent> {
+        self.domain
+            .drop_drained_buckets(topic_profile_id, &self.local_profile_id, now, dead)
+            .await
     }
 
     /// Profiles whose posts this device receives — direct friends plus
@@ -384,9 +417,6 @@ impl JynSyncService {
             tokio::time::sleep(Duration::from_millis(CONTACT_BOOTSTRAP_SETTLE_MILLIS)).await;
         }
         for peer_id in &peer_ids {
-            self.topic_map
-                .register_profile_author(&self.local_profile_id, *peer_id)
-                .await;
             self.local_handle.initiate_session(*peer_id);
         }
 
@@ -402,10 +432,9 @@ impl JynSyncService {
         let public_key = normalize_profile_id(profile_id)?;
         self.seed_contact_bootstrap(public_key).await?;
 
-        let topic = self
-            .topic_map
-            .register_profile_author(profile_id, public_key)
-            .await;
+        // The contact's own logs associate with their topic as we ingest them;
+        // with opaque log ids there is nothing to enumerate up front (ADR-0016).
+        let topic = profile_sync_topic(profile_id);
         self.address_book
             .add_topic(self.local_private_key.verifying_key(), topic)
             .await
@@ -766,6 +795,7 @@ mod tests {
                     visibility: Visibility::Friends,
                     expires_at: None,
                     created_at: 10,
+                    edited: false,
                 },
                 SpaceKind::Friends,
             )
@@ -827,6 +857,7 @@ mod tests {
                     visibility: Visibility::Friends,
                     expires_at: None,
                     created_at: 10,
+                    edited: false,
                 },
                 SpaceKind::Friends,
             )

@@ -261,12 +261,12 @@ async fn acting_on_a_torn_down_post_is_a_safe_no_op() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn permanent_and_public_posts_survive_the_drain() -> Result<()> {
+async fn permanent_posts_survive_but_expired_public_posts_are_reclaimed() -> Result<()> {
     let dir = tempdir()?;
     let staging = tempdir()?;
     let (bridge, _) = spawn(dir.path().to_path_buf()).await?;
 
-    // A permanent (never-expiring) non-public post: GC must never touch it.
+    // A permanent (never-expiring) post: GC must never touch it.
     let (_permanent_id, permanent_hash) = publish_post_with_media(
         &bridge,
         &staging,
@@ -277,8 +277,10 @@ async fn permanent_and_public_posts_survive_the_drain() -> Result<()> {
     )
     .await?;
 
-    // A public post given a past expiry: public posts stay read-time-filtered
-    // only — plaintext by design, their media is never torn down.
+    // A public post the author gives a past expiry: an ephemeral public post is
+    // ephemeral by the author's choice, so GC reclaims its bucket — and media —
+    // on expiry, just like a non-public one (co-deletion GC is the storage
+    // reclamation the Phase-3 spec deferred to this workstream).
     let (public_id, public_hash) = publish_post_with_media(
         &bridge,
         &staging,
@@ -297,8 +299,8 @@ async fn permanent_and_public_posts_survive_the_drain() -> Result<()> {
         "a permanent post's media is left untouched by the drain"
     );
     assert!(
-        cache_file(dir.path(), &public_hash).is_file(),
-        "an expired public post's media is left untouched by the drain"
+        !cache_file(dir.path(), &public_hash).exists(),
+        "an expired public post's media cache is reclaimed on drain"
     );
     Ok(())
 }
