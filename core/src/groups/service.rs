@@ -40,7 +40,9 @@ use super::{
 use crate::domain::{
     ensure_spaces_tables, DomainExtensions, DomainOperation, JynOperationDomain, ReducedPost,
 };
-use crate::spaces::{spaces_args_from_operation, JynSpacesStore, GLOBAL_GROUPS_CONTEXT_ID};
+use crate::spaces::{
+    spaces_args_from_operation, JynSpacesStore, PlacementHint, GLOBAL_GROUPS_CONTEXT_ID,
+};
 
 type GroupsManager = Manager<JynSpacesStore, GroupsForge, (), StrongRemoveResolver<()>>;
 type GroupsMessage = SpacesMessage<SpacesArgs<()>>;
@@ -131,6 +133,10 @@ struct GroupsForge {
     /// generates a random auth id internally, so the forge learns the
     /// binding from this slot (set under the ops lock just before the call).
     pending_create: Arc<Mutex<Option<String>>>,
+    /// Where `encrypt_to_group` parked the co-deletion log for the encrypted
+    /// application payload about to be forged (ADR-0018); the forge consumes
+    /// it. Control traffic takes no hint and lands on the group control log.
+    placement_hint: PlacementHint,
 }
 
 impl std::fmt::Debug for GroupsForge {
@@ -211,6 +217,20 @@ impl Forge<()> for GroupsForge {
 
     async fn forge(&self, args: SpacesArgs<()>) -> Result<Self::Message, Self::Error> {
         let group_id = self.group_for_args(&args).await?;
+        // An encrypted application payload co-deletes with the group post it
+        // carries, so it goes into that post's expiry bucket — the hint
+        // `encrypt_to_group` parked (ADR-0018). Control traffic is not tied
+        // to any post's lifetime; without a hint the append computes the
+        // group's control log from the wrapper itself. Take the hint
+        // (leaving None) so it applies to exactly one Application forge.
+        let placement = match &args {
+            SpacesArgs::Application { .. } => self
+                .placement_hint
+                .lock()
+                .expect("groups placement hint lock poisoned")
+                .take(),
+            _ => None,
+        };
         let args_bytes =
             encode_cbor(&args).map_err(|err| GroupsForgeError(format!("encode args: {err}")))?;
         let operation = DomainOperation::Spaces {
@@ -222,7 +242,7 @@ impl Forge<()> for GroupsForge {
 
         let mut domain = self.domain.clone();
         let header = domain
-            .append_group_operation(&self.private_key, Some(&group_id), operation)
+            .append_group_operation_in_log(&self.private_key, &group_id, operation, placement)
             .await
             .map_err(|err| GroupsForgeError(format!("append operation: {err:#}")))?;
 
@@ -285,6 +305,9 @@ pub struct JynGroups {
     private_key: SigningKey,
     pending: Arc<Mutex<Vec<PendingGroupsMessage>>>,
     pending_create: Arc<Mutex<Option<String>>>,
+    /// Placement parked for the encrypted payload the forge is about to
+    /// build (ADR-0018); see [`GroupsForge::placement_hint`].
+    placement_hint: PlacementHint,
     /// Shared with `JynSpaces`: both managers mutate the same auth graph
     /// row, so all operations across the two must serialize.
     ops_lock: Arc<tokio::sync::Mutex<()>>,
@@ -305,6 +328,7 @@ impl JynGroups {
         let spaces_store = JynSpacesStore::new(store.clone());
         let outbox: GroupsOutbox = Arc::new(Mutex::new(Vec::new()));
         let pending_create = Arc::new(Mutex::new(None));
+        let placement_hint: PlacementHint = Arc::new(Mutex::new(None));
         let forge = GroupsForge {
             domain: domain.clone(),
             private_key: private_key.clone(),
@@ -312,6 +336,7 @@ impl JynGroups {
             store,
             outbox: outbox.clone(),
             pending_create: Arc::clone(&pending_create),
+            placement_hint: Arc::clone(&placement_hint),
         };
         let manager = Manager::new(
             spaces_store.clone(),
@@ -330,6 +355,7 @@ impl JynGroups {
             private_key,
             pending: Arc::new(Mutex::new(Vec::new())),
             pending_create,
+            placement_hint,
             ops_lock,
         })
     }
@@ -624,9 +650,30 @@ impl JynGroups {
             .map_err(|err| anyhow::anyhow!("failed to load group space: {err}"))?
             .context("not welcomed into this group's space yet")?;
         let plaintext = encode_cbor(inner).context("failed to encode inner operation")?;
-        let (space_y, message) = space
-            .publish(&plaintext)
+
+        // Park the placement for the wrapper the forge is about to build:
+        // the encrypted payload co-deletes with the group post it carries,
+        // so it lands in that post's expiry bucket rather than the group
+        // control log (ADR-0018). We hold `ops_lock` here, so no other
+        // publish can race the hint.
+        let log_id = self
+            .domain
+            .group_log_id_for(group_id, inner)
             .await
+            .context("failed to resolve placement for encrypted group payload")?;
+        *self
+            .placement_hint
+            .lock()
+            .expect("groups placement hint lock poisoned") = Some(log_id);
+
+        let publish_result = space.publish(&plaintext).await;
+        // If the forge never ran (publish failed before forging), clear the
+        // hint so it can't mis-place an unrelated later payload.
+        *self
+            .placement_hint
+            .lock()
+            .expect("groups placement hint lock poisoned") = None;
+        let (space_y, message) = publish_result
             .map_err(|err| anyhow::anyhow!("failed to encrypt to group space: {err}"))?;
         self.persist_states(None, Some(space_y)).await?;
 
@@ -764,6 +811,32 @@ impl JynGroups {
             .await
             .context("failed to list members-only groups")?;
         Ok(rows.into_iter().map(|(group_id,)| group_id).collect())
+    }
+
+    /// The `(post_author, post_id)` pairs of this group's **dead** posts at
+    /// `now` — tombstoned or expired. GC's authority for the group topic
+    /// (ADR-0018), the group analog of
+    /// [`JynOperationDomain::dead_post_targets`]: reactions on these are
+    /// reaped, and buckets holding only these can drain. Empty while the
+    /// genesis is unknown.
+    pub async fn dead_post_targets(
+        &self,
+        group_id: &str,
+        now: u64,
+    ) -> Result<std::collections::HashSet<(String, String)>> {
+        let mut dead = std::collections::HashSet::new();
+        let Some(state) = read_group_state(&self.domain, group_id).await? else {
+            return Ok(dead);
+        };
+        for (author, post_id) in &state.tombstoned_posts {
+            dead.insert((author.clone(), post_id.clone()));
+        }
+        for post in &state.posts {
+            if post.is_expired(now) {
+                dead.insert((post.profile_id.clone(), post.post_id.clone()));
+            }
+        }
+        Ok(dead)
     }
 
     /// The group's state as the local profile may see it, or `None` while
@@ -1673,6 +1746,74 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn encrypted_group_posts_land_in_expiry_buckets_not_the_control_log() -> Result<()> {
+        let owner_key = SigningKey::generate();
+        let owner_id = owner_key.verifying_key().to_string();
+        let store = SqliteStore::temporary().await;
+        let groups = service(store, &owner_key).await?;
+        let group_id = groups
+            .create_group(
+                "sealed room",
+                GroupContentMode::MembersOnly,
+                GroupJoinMode::Request,
+                GroupDiscoverability::Unlisted,
+                10,
+            )
+            .await?;
+
+        // Everything so far — genesis and the space's control traffic — sits
+        // on the creator's permanent control log.
+        let control_logs: std::collections::HashSet<_> = groups
+            .domain
+            .operations_for_group_raw(&group_id)
+            .await?
+            .into_iter()
+            .map(|op| op.header.extensions.log_id)
+            .collect();
+        assert_eq!(control_logs.len(), 1, "control traffic shares one log");
+        let control_log = *control_logs.iter().next().unwrap();
+
+        let post = |post_id: &str, expires_at: Option<u64>| DomainOperation::PostPublished {
+            profile_id: owner_id.clone(),
+            post_id: post_id.into(),
+            body: "sealed".into(),
+            media: Vec::new(),
+            visibility: crate::domain::Visibility::Public,
+            expires_at,
+            created_at: 15,
+            edited: false,
+        };
+        let wrapper_log = |ops: &[p2panda_core::Operation<DomainExtensions>], skip: usize| {
+            ops.iter()
+                .skip(skip)
+                .map(|op| op.header.extensions.log_id)
+                .collect::<Vec<_>>()
+        };
+
+        let before = groups.domain.operations_for_group_raw(&group_id).await?;
+        groups
+            .publish_to_group(&group_id, post("p-1", Some(9_000_000)))
+            .await?;
+        groups
+            .publish_to_group(&group_id, post("p-2", Some(9_000_010)))
+            .await?;
+        groups
+            .publish_to_group(&group_id, post("p-3", None))
+            .await?;
+        let after = groups.domain.operations_for_group_raw(&group_id).await?;
+        let new_logs = wrapper_log(&after, before.len());
+        assert_eq!(new_logs.len(), 3, "each post appended one sealed wrapper");
+
+        // Same expiry window → same bucket; the permanent post and the
+        // control log each live apart (ADR-0018).
+        assert_eq!(new_logs[0], new_logs[1]);
+        assert_ne!(new_logs[0], control_log);
+        assert_ne!(new_logs[2], new_logs[0]);
+        assert_ne!(new_logs[2], control_log);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn governance_gates_and_owner_leave_are_enforced_at_the_service() -> Result<()> {
         let owner_key = SigningKey::generate();
         let store = SqliteStore::temporary().await;
@@ -1735,7 +1876,7 @@ mod tests {
             }],
             comments: Vec::new(),
             hearts: Vec::new(),
-            tombstoned_post_ids: Vec::new(),
+            tombstoned_posts: Vec::new(),
             latest_activity_at: 15,
         };
         let denied = HashSet::new();

@@ -95,7 +95,10 @@ pub struct ReducedGroupState {
     pub posts: Vec<ReducedPost>,
     pub comments: Vec<GroupComment>,
     pub hearts: Vec<GroupHeart>,
-    pub tombstoned_post_ids: Vec<String>,
+    /// `(author, post_id)` pairs the author has deleted — the deleter is
+    /// always the post's author (the reducer only lets a tombstone suppress
+    /// its own layer's posts). GC keys reaction reaping off these.
+    pub tombstoned_posts: Vec<(String, String)>,
     /// Most recent post/comment/heart time, for the river digest door.
     pub latest_activity_at: u64,
 }
@@ -564,8 +567,13 @@ fn reduce_group_operations(
             .then_with(|| left.hearter_profile_id.cmp(&right.hearter_profile_id))
     });
 
-    let mut tombstoned_post_ids: Vec<String> = tombstones.into_keys().collect();
-    tombstoned_post_ids.sort();
+    // The deleter is the post's author: a group tombstone only ever
+    // suppresses posts by whoever laid it.
+    let mut tombstoned_posts: Vec<(String, String)> = tombstones
+        .into_iter()
+        .map(|(post_id, deleter)| (deleter, post_id))
+        .collect();
+    tombstoned_posts.sort();
 
     Some(ReducedGroupState {
         group_id: group_id.to_owned(),
@@ -581,7 +589,7 @@ fn reduce_group_operations(
         posts,
         comments,
         hearts,
-        tombstoned_post_ids,
+        tombstoned_posts,
         latest_activity_at,
     })
 }
@@ -883,7 +891,10 @@ mod tests {
             .await?;
         let state = fixture.state().await?;
         assert!(state.posts.iter().all(|post| post.post_id != "post-m"));
-        assert!(state.tombstoned_post_ids.contains(&"post-m".to_owned()));
+        assert!(state
+            .tombstoned_posts
+            .iter()
+            .any(|(_, post_id)| post_id == "post-m"));
         Ok(())
     }
 

@@ -963,12 +963,14 @@ async fn default_handle_command(
             expires_at,
         } => {
             let sync = state.sync.lock().await;
-            // A lifetime change re-publishes the post as a self-contained
-            // snapshot (ADR-0016): the newest publication for a post id is
-            // its current state, so the group reducer picks up the new
-            // expiry without a dedicated lifetime op. Group logs are one
-            // co-deletion unit per group, so unlike profile posts there is
-            // no bucket move and no re-home marker.
+            // A lifetime change re-homes the post (ADR-0016, group-scoped
+            // per ADR-0018): a marker into the old bucket — laid first,
+            // while the old copy is still the post's current one — disowns
+            // that copy, so GC neither keeps the old bucket alive for it
+            // nor reclaims media the live copy still references; then a
+            // self-contained snapshot carries the post's state into the new
+            // expiry bucket. The group reducer picks the newest publication
+            // per post id, so the snapshot supersedes the old copy.
             let post = sync
                 .groups()
                 .group_view(&group_id)
@@ -978,6 +980,19 @@ async fn default_handle_command(
                 .into_iter()
                 .find(|post| post.post_id == post_id && post.profile_id == state.local_profile_id)
                 .with_context(|| format!("post {post_id} not found or not ours"))?;
+            if post.expires_at == expires_at {
+                return Ok(());
+            }
+            sync.groups()
+                .publish_to_group(
+                    &group_id,
+                    DomainOperation::PostRehomed {
+                        profile_id: state.local_profile_id.clone(),
+                        post_id: post_id.clone(),
+                        moved_at: now_unix_secs(),
+                    },
+                )
+                .await?;
             sync.groups()
                 .publish_to_group(
                     &group_id,
@@ -2566,6 +2581,97 @@ async fn drain_expired(state: &RuntimeState, event_tx: &Sender<NetworkEvent>) ->
             Ok(freed) => reclaim_dropped_content(state, freed).await,
             Err(err) => {
                 tracing::warn!("failed to drop drained buckets on {topic_profile_id}: {err:#}")
+            }
+        }
+    }
+
+    // Group topics get the same treatment (ADR-0018), keyed by each group's
+    // own dead set. Members-only posts are additionally payload-erased at
+    // expiry — every member's stored copy, ours included — matching the
+    // ephemerality promise of non-public profile posts; public group posts
+    // are plaintext by design and leave at bucket drop. Best-effort per
+    // group, like the per-contact loops above.
+    let group_ids = {
+        let sync = state.sync.lock().await;
+        sync.groups()
+            .registered_groups()
+            .await
+            .unwrap_or_else(|err| {
+                tracing::warn!("failed to list groups for GC: {err:#}");
+                Vec::new()
+            })
+    };
+    let members_only: std::collections::HashSet<String> = {
+        let sync = state.sync.lock().await;
+        sync.groups()
+            .members_only_groups()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .collect()
+    };
+    for group_id in &group_ids {
+        let sync = state.sync.lock().await;
+        let dead = match sync.groups().dead_post_targets(group_id, now).await {
+            Ok(dead) => dead,
+            Err(err) => {
+                tracing::warn!("failed to compute dead set for group {group_id}: {err:#}");
+                continue;
+            }
+        };
+        if members_only.contains(group_id) {
+            let expired: Vec<crate::domain::ReducedPost> =
+                match sync.groups().group_view(group_id).await {
+                    Ok(Some(view)) => view
+                        .posts
+                        .into_iter()
+                        .filter(|post| post.is_expired(now))
+                        .collect(),
+                    Ok(None) => Vec::new(),
+                    Err(err) => {
+                        tracing::warn!(
+                            "failed to read group {group_id} for expiry teardown: {err:#}"
+                        );
+                        Vec::new()
+                    }
+                };
+            drop(sync);
+            for post in &expired {
+                if post.profile_id == state.local_profile_id {
+                    unpin_and_prune_prefix(state, &format!("feed/{}/", post.post_id)).await;
+                } else {
+                    for attachment in &post.media {
+                        crate::media::prune_cached(&state.media_cache_dir, &attachment.blob_hash);
+                        if let Ok(hash) = attachment.blob_hash.parse::<p2panda_blobs::Hash>() {
+                            state.node.blobs.block_serving_hashes([hash]);
+                        }
+                    }
+                }
+                let sync = state.sync.lock().await;
+                // The ops live on the group topic, so the erase walks the
+                // group audience — this strips every member's stored copy.
+                if let Err(err) = sync.erase_post_content(group_id, &post.post_id).await {
+                    tracing::warn!(
+                        "failed to erase expired group post {}: {err:#}",
+                        post.post_id
+                    );
+                }
+            }
+        } else {
+            drop(sync);
+        }
+
+        let sync = state.sync.lock().await;
+        if let Err(err) = sync.reap_reactions_for_dead_targets(group_id, &dead).await {
+            tracing::warn!("failed to reap reactions in group {group_id}: {err:#}");
+        }
+        match sync.drop_drained_buckets(group_id, now, &dead).await {
+            Ok(freed) => {
+                drop(sync);
+                reclaim_dropped_content(state, freed).await;
+            }
+            Err(err) => {
+                tracing::warn!("failed to drop drained buckets in group {group_id}: {err:#}")
             }
         }
     }

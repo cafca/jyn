@@ -769,14 +769,15 @@ impl JynOperationDomain {
 
     /// Appends an operation to the author's log for a group and associates
     /// it with the group's replication topic — never with any profile topic,
-    /// so group content stays exclusively in the group (ADR-0007). Each
-    /// author gets one dynamic log per group (registry context
-    /// `group/<GroupId>`), holding their genesis (if creator), governance,
-    /// posts and interactions for that group.
+    /// so group content stays exclusively in the group (ADR-0007). Placement
+    /// mirrors the profile scheme, scoped per group (ADR-0018): governance
+    /// and control on the group's permanent control log, posts in expiry
+    /// buckets, reactions in their own month buckets — see
+    /// [`Self::group_log_id_for`].
     ///
     /// `group_id` is `None` only for the genesis op, which *mints* the
     /// GroupId as its own hash (ADR-0006): its log id is drawn from the
-    /// allocator before signing and bound to the group's registry context
+    /// allocator before signing and bound to the group's control context
     /// after, and its header carries the [`GROUP_GENESIS_AUDIENCE`] sentinel
     /// so remote ingest can derive the group topic from the op's hash
     /// without decoding the body.
@@ -793,22 +794,8 @@ impl JynOperationDomain {
         );
         match group_id {
             Some(group_id) => {
-                let log_id = self
-                    .log_id_for_context(&group_log_context(group_id))
-                    .await?;
-                // Header-only read, as in `append_operation_in_log`.
-                let previous_ordering = self
-                    .operations_for_group_raw(group_id)
-                    .await?
-                    .into_iter()
-                    .map(|operation| operation.header.extensions.ordering_timestamp)
-                    .max();
-                let header = self
-                    .sign_header(private_key, log_id, group_id, previous_ordering, &operation)
-                    .await?;
-                self.ingest_signed(&header, &log_id, group_sync_topic(group_id), &operation)
-                    .await?;
-                Ok(header)
+                self.append_group_operation_in_log(private_key, group_id, operation, None)
+                    .await
             }
             None => {
                 let log_id = self.allocate_log_id().await?;
@@ -822,13 +809,136 @@ impl JynOperationDomain {
                     )
                     .await?;
                 let group_id = header.hash().to_string();
-                self.register_log_id(&group_log_context(&group_id), log_id)
+                self.register_log_id(&group_control_context(&group_id), log_id)
                     .await?;
                 self.ingest_signed(&header, &log_id, group_sync_topic(&group_id), &operation)
                     .await?;
                 Ok(header)
             }
         }
+    }
+
+    /// Appends a (non-genesis) group operation into an explicitly chosen
+    /// log, or — when `log_id` is `None` — into the log
+    /// [`Self::group_log_id_for`] computes. Only the groups forge should
+    /// need the explicit form: an encrypted application payload's placement
+    /// is computed from its *inner* operation, which is opaque by the time
+    /// the wrapper reaches this method (ADR-0018).
+    pub(crate) async fn append_group_operation_in_log(
+        &mut self,
+        private_key: &SigningKey,
+        group_id: &str,
+        operation: DomainOperation,
+        log_id: Option<DomainLogId>,
+    ) -> Result<Header<DomainExtensions>> {
+        anyhow::ensure!(
+            !matches!(operation, DomainOperation::GroupCreated { .. }),
+            "genesis ops go through append_group_operation"
+        );
+        let log_id = match log_id {
+            Some(log_id) => log_id,
+            None => self.group_log_id_for(group_id, &operation).await?,
+        };
+        // Header-only read, as in `append_operation_in_log`.
+        let previous_ordering = self
+            .operations_for_group_raw(group_id)
+            .await?
+            .into_iter()
+            .map(|operation| operation.header.extensions.ordering_timestamp)
+            .max();
+        let header = self
+            .sign_header(private_key, log_id, group_id, previous_ordering, &operation)
+            .await?;
+        self.ingest_signed(&header, &log_id, group_sync_topic(group_id), &operation)
+            .await?;
+        Ok(header)
+    }
+
+    /// Resolves the co-deletion log a group operation belongs in — the
+    /// profile placement scheme of [`Self::log_id_for`], scoped per group
+    /// (ADR-0018):
+    ///
+    /// - Posts are placed by their own expiry; their edits, tombstone and
+    ///   re-home marker follow the log the post's current copy lives in.
+    /// - Hearts and comments are placed by their own creation month,
+    ///   reaped reactively when their target dies (never re-homed).
+    /// - Everything else — governance, join/leave, and `Spaces` wrappers
+    ///   (control traffic; encrypted *posts* arrive with an explicit
+    ///   placement instead, see [`Self::append_group_operation_in_log`]) —
+    ///   lands on the group's permanent control log, which GC never drains:
+    ///   membership history must outlive any post.
+    pub(crate) async fn group_log_id_for(
+        &self,
+        group_id: &str,
+        operation: &DomainOperation,
+    ) -> Result<DomainLogId> {
+        let now = now_unix_secs();
+        let context = match operation {
+            DomainOperation::PostPublished {
+                expires_at,
+                created_at,
+                ..
+            } => group_bucket_context(group_id, &LogBucket::place(*expires_at, *created_at, now)),
+            DomainOperation::PostEdited {
+                profile_id,
+                post_id,
+                edited_at: at,
+                ..
+            }
+            | DomainOperation::PostRehomed {
+                profile_id,
+                post_id,
+                moved_at: at,
+            }
+            | DomainOperation::PostDeleted {
+                profile_id,
+                post_id,
+                deleted_at: at,
+            } => match self
+                .current_group_post_log(group_id, profile_id, post_id)
+                .await?
+            {
+                Some(log_id) => return Ok(log_id),
+                None => group_bucket_context(group_id, &LogBucket::place(None, *at, now)),
+            },
+            DomainOperation::HeartChanged {
+                recorded_at: at, ..
+            }
+            | DomainOperation::CommentPublished { created_at: at, .. } => {
+                group_bucket_context(group_id, &LogBucket::place_reaction(*at))
+            }
+            _ => group_control_context(group_id),
+        };
+        self.log_id_for_context(&context).await
+    }
+
+    /// The log holding a group post's current (newest) published copy from
+    /// its author's stored operations — [`Self::current_post_log`] for the
+    /// group topic. Encrypted posts resolve through their decrypted inner
+    /// op, whose `StoredDomainOperation` carries the wrapper's log id.
+    async fn current_group_post_log(
+        &self,
+        group_id: &str,
+        profile_id: &str,
+        post_id: &str,
+    ) -> Result<Option<DomainLogId>> {
+        let operations = self.operations_for_group(group_id).await?;
+        Ok(operations
+            .into_iter()
+            .filter(|op| {
+                op.author.to_string() == profile_id
+                    && matches!(
+                        &op.operation,
+                        DomainOperation::PostPublished { post_id: id, .. } if id == post_id
+                    )
+            })
+            .max_by(|left, right| {
+                left.header
+                    .extensions
+                    .ordering_timestamp
+                    .cmp(&right.header.extensions.ordering_timestamp)
+            })
+            .map(|op| op.log_id))
     }
 
     async fn sign_header(
@@ -1913,9 +2023,18 @@ pub fn group_sync_topic(group_id: &str) -> Topic {
     sync_topic(group_id)
 }
 
-/// The local registry context an author's per-group log is allocated under.
-fn group_log_context(group_id: &str) -> String {
-    format!("group/{group_id}")
+/// The registry context of an author's permanent control log for a group
+/// (ADR-0018): genesis, governance, join/leave, and spaces control traffic.
+/// Never drained by GC — membership history must outlive any post.
+fn group_control_context(group_id: &str) -> String {
+    format!("group/{group_id}/control")
+}
+
+/// The registry context of a group-scoped co-deletion bucket (ADR-0018):
+/// the profile bucket scheme (`LogBucket`), prefixed per group so the log
+/// stays on the group's topic.
+fn group_bucket_context(group_id: &str, bucket: &LogBucket) -> String {
+    format!("group/{group_id}/{}", bucket.context_key())
 }
 
 /// Returns a hybrid timestamp strictly after `previous` (when given) and never behind the local
@@ -2623,7 +2742,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn group_operations_share_one_per_group_log_and_topic() -> Result<()> {
+    async fn group_governance_shares_the_control_log_and_the_group_topic() -> Result<()> {
         let creator = SigningKey::generate();
         let creator_id = creator.verifying_key().to_string();
         let mut domain = JynOperationDomain::new(SqliteStore::temporary().await);
@@ -2646,8 +2765,8 @@ mod tests {
         assert_eq!(genesis.extensions.audience, GROUP_GENESIS_AUDIENCE);
         assert!(genesis.extensions.log_id.0 >= DomainLogId::FIRST_DYNAMIC);
 
-        // A later op by the creator lands in the same per-group log, with
-        // the group as its audience.
+        // Governance by the creator lands in the same permanent control log
+        // as the genesis, with the group as its audience (ADR-0018).
         let follow_up = domain
             .append_group_operation(
                 &creator,
@@ -2692,6 +2811,257 @@ mod tests {
             .await?;
         let group_ops = domain.operations_for_group(&group_id).await?;
         assert_eq!(group_ops.len(), 3);
+        Ok(())
+    }
+
+    /// Creates a public group and returns its GroupId (ADR-0018 tests).
+    async fn mint_group(domain: &mut JynOperationDomain, creator: &SigningKey) -> Result<String> {
+        let header = domain
+            .append_group_operation(
+                creator,
+                None,
+                DomainOperation::GroupCreated {
+                    creator_profile_id: creator.verifying_key().to_string(),
+                    name: "reading circle".into(),
+                    content_mode: GroupContentMode::Public,
+                    join_mode: GroupJoinMode::Open,
+                    discoverability: GroupDiscoverability::Listed,
+                    created_at: 10,
+                },
+            )
+            .await?;
+        Ok(header.hash().to_string())
+    }
+
+    fn group_post(
+        profile_id: &str,
+        post_id: &str,
+        expires_at: Option<u64>,
+        created_at: u64,
+    ) -> DomainOperation {
+        DomainOperation::PostPublished {
+            profile_id: profile_id.to_owned(),
+            post_id: post_id.to_owned(),
+            body: "in the group".to_owned(),
+            media: Vec::new(),
+            visibility: Visibility::Public,
+            expires_at,
+            created_at,
+            edited: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn group_posts_bucket_by_expiry_and_reactions_by_month() -> Result<()> {
+        let creator = SigningKey::generate();
+        let creator_id = creator.verifying_key().to_string();
+        let mut domain = JynOperationDomain::new(SqliteStore::temporary().await);
+        let group_id = mint_group(&mut domain, &creator).await?;
+        let control_log = domain
+            .operations_for_group_raw(&group_id)
+            .await?
+            .first()
+            .expect("genesis stored")
+            .header
+            .extensions
+            .log_id;
+
+        // Two posts whose (past) expiries fall into the same 6h window share
+        // one bucket log — distinct from the control log; a permanent post
+        // goes to its post-month bucket instead.
+        let first = domain
+            .append_group_operation(
+                &creator,
+                Some(&group_id),
+                group_post(&creator_id, "p-1", Some(9_000_000), 5),
+            )
+            .await?;
+        let second = domain
+            .append_group_operation(
+                &creator,
+                Some(&group_id),
+                group_post(&creator_id, "p-2", Some(9_000_010), 5),
+            )
+            .await?;
+        let permanent = domain
+            .append_group_operation(
+                &creator,
+                Some(&group_id),
+                group_post(&creator_id, "p-3", None, 5),
+            )
+            .await?;
+        assert_eq!(first.extensions.log_id, second.extensions.log_id);
+        assert_ne!(first.extensions.log_id, control_log);
+        assert_ne!(permanent.extensions.log_id, first.extensions.log_id);
+
+        // A heart lives in its own month bucket, apart from posts and control.
+        let heart = domain
+            .append_group_operation(
+                &creator,
+                Some(&group_id),
+                DomainOperation::HeartChanged {
+                    profile_id: creator_id.clone(),
+                    post_author_profile_id: creator_id.clone(),
+                    post_id: "p-1".into(),
+                    active: true,
+                    recorded_at: 9_000_000,
+                    group_id: None,
+                    group_name: None,
+                },
+            )
+            .await?;
+        assert_ne!(heart.extensions.log_id, first.extensions.log_id);
+        assert_ne!(heart.extensions.log_id, control_log);
+
+        // An edit follows the log its post's current copy lives in.
+        let edit = domain
+            .append_group_operation(
+                &creator,
+                Some(&group_id),
+                DomainOperation::PostEdited {
+                    profile_id: creator_id.clone(),
+                    post_id: "p-1".into(),
+                    body: "edited".into(),
+                    media: None,
+                    edited_at: 6,
+                },
+            )
+            .await?;
+        assert_eq!(edit.extensions.log_id, first.extensions.log_id);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn drained_group_buckets_drop_and_the_control_log_survives() -> Result<()> {
+        let creator = SigningKey::generate();
+        let creator_id = creator.verifying_key().to_string();
+        let mut domain = JynOperationDomain::new(SqliteStore::temporary().await);
+        let group_id = mint_group(&mut domain, &creator).await?;
+
+        domain
+            .append_group_operation(
+                &creator,
+                Some(&group_id),
+                group_post(&creator_id, "p-1", Some(9_000_000), 5),
+            )
+            .await?;
+        domain
+            .append_group_operation(
+                &creator,
+                Some(&group_id),
+                DomainOperation::HeartChanged {
+                    profile_id: creator_id.clone(),
+                    post_author_profile_id: creator_id.clone(),
+                    post_id: "p-1".into(),
+                    active: true,
+                    recorded_at: 9_000_000,
+                    group_id: None,
+                    group_name: None,
+                },
+            )
+            .await?;
+
+        // The post is long expired: its reaction reaps, then both the expiry
+        // bucket and the drained reaction month drop whole — while the
+        // genesis stays put on the control log.
+        let dead = HashSet::from([(creator_id.clone(), "p-1".to_owned())]);
+        domain
+            .reap_reactions_for_dead_targets(&group_id, &dead)
+            .await?;
+        let freed = domain
+            .drop_drained_buckets(&group_id, &creator_id, FUTURE, &dead)
+            .await?;
+        assert!(freed.post_ids.contains("p-1"));
+
+        let remaining = domain.operations_for_group(&group_id).await?;
+        assert_eq!(remaining.len(), 1);
+        assert!(matches!(
+            remaining[0].operation,
+            DomainOperation::GroupCreated { .. }
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_rehomed_group_posts_old_bucket_drains_without_freeing_its_media() -> Result<()> {
+        let creator = SigningKey::generate();
+        let creator_id = creator.verifying_key().to_string();
+        let mut domain = JynOperationDomain::new(SqliteStore::temporary().await);
+        let group_id = mint_group(&mut domain, &creator).await?;
+
+        let attachment = MediaAttachment {
+            blob_hash: "blob-1".into(),
+            kind: MediaKind::Photo,
+            byte_len: 4,
+            mime: "image/png".into(),
+            duration_ms: None,
+            waveform: None,
+            width: None,
+            height: None,
+            file_name: None,
+            blob_secret: None,
+        };
+        let old_copy = domain
+            .append_group_operation(
+                &creator,
+                Some(&group_id),
+                DomainOperation::PostPublished {
+                    profile_id: creator_id.clone(),
+                    post_id: "p-1".into(),
+                    body: "short-lived at first".into(),
+                    media: vec![attachment.clone()],
+                    visibility: Visibility::Public,
+                    expires_at: Some(9_000_000),
+                    created_at: 5,
+                    edited: false,
+                },
+            )
+            .await?;
+        // Promote to permanent: marker first (into the old bucket, while the
+        // old copy is still current), then the snapshot into its new bucket.
+        let marker = domain
+            .append_group_operation(
+                &creator,
+                Some(&group_id),
+                DomainOperation::PostRehomed {
+                    profile_id: creator_id.clone(),
+                    post_id: "p-1".into(),
+                    moved_at: 6,
+                },
+            )
+            .await?;
+        assert_eq!(marker.extensions.log_id, old_copy.extensions.log_id);
+        let snapshot = domain
+            .append_group_operation(
+                &creator,
+                Some(&group_id),
+                DomainOperation::PostPublished {
+                    profile_id: creator_id.clone(),
+                    post_id: "p-1".into(),
+                    body: "short-lived at first".into(),
+                    media: vec![attachment],
+                    visibility: Visibility::Public,
+                    expires_at: None,
+                    created_at: 5,
+                    edited: false,
+                },
+            )
+            .await?;
+        assert_ne!(snapshot.extensions.log_id, old_copy.extensions.log_id);
+
+        // The old bucket drains (its copy is disowned by the marker), but the
+        // blob is NOT reclaimed — the live snapshot still references it.
+        let freed = domain
+            .drop_drained_buckets(&group_id, &creator_id, FUTURE, &HashSet::new())
+            .await?;
+        assert!(!freed.blob_hashes.contains("blob-1"));
+        assert!(!freed.post_ids.contains("p-1"));
+
+        let remaining = domain.operations_for_group(&group_id).await?;
+        assert!(remaining.iter().any(|op| matches!(
+            &op.operation,
+            DomainOperation::PostPublished { post_id, expires_at: None, .. } if post_id == "p-1"
+        )));
         Ok(())
     }
 
