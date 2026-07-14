@@ -39,9 +39,13 @@ sealing and handed to the forge as a placement hint — the exact mechanism
 ADR-0016 uses for profile spaces (`JynSpaces::publish_encrypted`). Control
 traffic takes no hint and lands on the group control log.
 
-Payoff: an expiry bucket is droppable by its window bound alone, so members
-reclaim expired encrypted posts without decrypting them, and non-members
-holding ciphertext never hold it past the window either.
+Limit: GC decides drainability by reading payloads, and a member's device
+classifies wrappers through its decrypted cache — so members reclaim expired
+encrypted buckets, but a **non-member** holding a members-only group's
+ciphertext sees only opaque wrappers, which deliberately keep their log
+alive. Un-welcomed devices therefore retain such ciphertext indefinitely
+(tracked: `.scratch/groups-follow-ups/issues/02-non-member-group-ciphertext-never-gcd.md`;
+window-bound dropping without payload reads is the candidate fix).
 
 ## Lifetime changes re-home, like profile posts
 
