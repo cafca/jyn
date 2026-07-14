@@ -740,7 +740,6 @@ class _ComposerState extends ConsumerState<Composer> {
                   child: VoiceNotePlayer(
                     waveform: draft.waveform,
                     durationMs: draft.durationMs,
-                    mime: 'audio/wav',
                     path: draft.path,
                   ),
                 ),

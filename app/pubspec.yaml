@@ -41,8 +41,13 @@ dependencies:
   freezed_annotation: ^3.1.0
   file_selector: ^1.1.0
   record: ^6.2.1
-  just_audio: ^0.10.6
-  video_player: ^2.11.1
+  # media_kit (libmpv/FFmpeg) is the single playback engine on every platform
+  # (ADR 0018): it decodes every container the composer accepts and works on
+  # Linux/Windows where just_audio/video_player don't. media_kit_libs_video
+  # bundles the native libmpv (video libs include audio decode too).
+  media_kit: ^1.1.11
+  media_kit_video: ^1.2.5
+  media_kit_libs_video: ^1.0.5
   url_launcher: ^6.3.2
   auto_updater: ^1.0.0
 

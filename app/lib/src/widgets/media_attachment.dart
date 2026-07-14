@@ -49,7 +49,6 @@ class MediaAttachmentView extends ConsumerWidget {
       MediaKind.audio => VoiceNotePlayer(
         waveform: attachment.waveform,
         durationMs: attachment.durationMs,
-        mime: attachment.mime,
         path: path,
       ),
       MediaKind.video => _mediaTile(

@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
     show ExternalLibrary, ExternalLibraryLoaderConfig, loadExternalLibrary;
+import 'package:media_kit/media_kit.dart';
 
 import 'src/providers.dart';
 import 'src/rust/api/lifecycle.dart';
@@ -18,6 +19,9 @@ import 'src/theme/tokens.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // media_kit's single media engine (ADR 0018); must run before any Player is
+  // constructed for voice notes or video.
+  MediaKit.ensureInitialized();
   // Screenshot harness: boot a named screen on fixture data, capture a
   // PNG, exit. Never reachable without JYN_SHOT (see src/shot/shot.dart).
   final shot = shotScreen();
