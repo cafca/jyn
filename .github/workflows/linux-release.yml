@@ -46,9 +46,11 @@ jobs:
           # pkg-config (ADR 0018). At build the AppImage maker runs `ldd` on
           # that plugin and copies libmpv + its transitive deps into the
           # AppDir, so the AppImage ends up self-contained.
+          # libasound2-dev: the volume_controller plugin's Linux CMake does
+          # find_package(ALSA REQUIRED).
           sudo apt-get install -y \
             clang cmake ninja-build pkg-config libgtk-3-dev libmpv-dev \
-            xvfb imagemagick desktop-file-utils libfuse2
+            libasound2-dev xvfb imagemagick desktop-file-utils libfuse2
       - name: Install appimagetool
         run: |
           sudo curl -fsSL -o /usr/local/bin/appimagetool \
