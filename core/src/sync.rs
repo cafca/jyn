@@ -16,7 +16,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use flume::Sender;
 use futures_util::StreamExt;
-use p2panda_core::cbor::encode_cbor;
+use p2panda_core::cbor::{decode_cbor, encode_cbor};
 use p2panda_core::Topic;
 use p2panda_core::{Body, Operation, SigningKey, VerifyingKey};
 use p2panda_net::addrs::NodeInfo;
@@ -29,9 +29,10 @@ use p2panda_sync::protocols::TopicLogSyncEvent;
 
 use crate::bridge::NetworkEvent;
 use crate::domain::{
-    profile_sync_topic, DomainExtensions, DomainLogId, DomainOperation, JynOperationDomain,
-    ReducedProfileState, Visibility,
+    group_sync_topic, profile_sync_topic, DomainExtensions, DomainLogId, DomainOperation,
+    JynOperationDomain, ReducedProfileState, Visibility,
 };
+use crate::groups::{GroupDiscoverability, GroupSuggestion, JynGroups};
 use crate::node::AppNode;
 use crate::profile::load_private_key_from_data_dir;
 use crate::spaces::{derive_circle_members, JynSpaces, SpaceKind};
@@ -54,6 +55,17 @@ struct ContactSync {
     task: tokio::task::JoinHandle<()>,
 }
 
+struct GroupSync {
+    // Lives for the process lifetime; the handle sits in the shared map so
+    // topic tasks and command handlers can publish into the group's gossip.
+    #[allow(dead_code)]
+    task: tokio::task::JoinHandle<()>,
+}
+
+/// Live-publish handles per group topic, shared with the group topic tasks.
+type GroupHandles =
+    std::sync::Arc<std::sync::RwLock<HashMap<String, std::sync::Arc<DomainSyncHandle>>>>;
+
 pub(crate) struct JynSyncService {
     store: DomainStore,
     domain: JynOperationDomain,
@@ -67,6 +79,9 @@ pub(crate) struct JynSyncService {
     contact_streams: HashMap<String, ContactSync>,
     event_tx: Sender<NetworkEvent>,
     spaces: JynSpaces,
+    groups: JynGroups,
+    group_streams: HashMap<String, GroupSync>,
+    group_handles: GroupHandles,
     _local_task: tokio::task::JoinHandle<()>,
 }
 
@@ -127,6 +142,15 @@ impl JynSyncService {
             local_handle.clone(),
         );
 
+        let groups = JynGroups::new(
+            store.clone(),
+            local_private_key.clone(),
+            local_profile_id.clone(),
+            spaces.ops_lock(),
+        )
+        .await
+        .context("failed to initialize groups service")?;
+
         let service = Self {
             store,
             domain,
@@ -140,6 +164,9 @@ impl JynSyncService {
             contact_streams: HashMap::new(),
             event_tx,
             spaces,
+            groups,
+            group_streams: HashMap::new(),
+            group_handles: std::sync::Arc::new(std::sync::RwLock::new(HashMap::new())),
             _local_task: local_task,
         };
         // Flush any startup-forged spaces messages (key bundle, space
@@ -522,6 +549,292 @@ impl JynSyncService {
         }
     }
 
+    /// The groups service, for command handlers.
+    pub(crate) fn groups(&self) -> &JynGroups {
+        &self.groups
+    }
+
+    /// Joins a group's replication topic (ADR-0007) and starts its topic
+    /// task. Idempotent; re-nudges known peers when already joined.
+    pub(crate) async fn join_group_topic(&mut self, group_id: &str) -> Result<()> {
+        if !self.group_streams.contains_key(group_id) {
+            let topic = group_sync_topic(group_id);
+            self.address_book
+                .add_topic(self.local_private_key.verifying_key(), topic)
+                .await
+                .with_context(|| format!("failed to register group topic for {group_id}"))?;
+            let handle =
+                self.log_sync.stream(topic, true).await.with_context(|| {
+                    format!("failed to join LogSync topic for group {group_id}")
+                })?;
+            let subscription = handle.subscribe().await.with_context(|| {
+                format!("failed to subscribe to LogSync topic for group {group_id}")
+            })?;
+            let handle = std::sync::Arc::new(handle);
+            self.group_handles
+                .write()
+                .expect("group handles lock poisoned")
+                .insert(group_id.to_owned(), std::sync::Arc::clone(&handle));
+            let task = spawn_group_topic_task(
+                subscription,
+                self.store.clone(),
+                group_id.to_owned(),
+                self.event_tx.clone(),
+                self.groups.clone(),
+                std::sync::Arc::clone(&self.group_handles),
+            );
+            self.group_streams
+                .insert(group_id.to_owned(), GroupSync { task });
+        }
+        self.initiate_group_sessions(group_id).await
+    }
+
+    /// Starts sync sessions with every peer known for the group's topic.
+    async fn initiate_group_sessions(&self, group_id: &str) -> Result<()> {
+        let topic = group_sync_topic(group_id);
+        let handle = self
+            .group_handles
+            .read()
+            .expect("group handles lock poisoned")
+            .get(group_id)
+            .cloned();
+        let Some(handle) = handle else {
+            return Ok(());
+        };
+        let node_infos = self
+            .address_book
+            .node_infos_by_topics([topic])
+            .await
+            .with_context(|| format!("failed to query peers of group {group_id}"))?;
+        for node_info in node_infos {
+            if node_info.node_id != self.local_private_key.verifying_key() {
+                handle.initiate_session(node_info.node_id);
+            }
+        }
+        Ok(())
+    }
+
+    /// Registers a group locally, seeds reach through the given profiles
+    /// (e.g. the friend whose advertisement or heart pointed here, or the
+    /// Owner), and joins its topic — membership not required: for public
+    /// groups this is the visit-only read path (ADR-0010).
+    pub(crate) async fn sync_group(
+        &mut self,
+        group_id: &str,
+        via_profile_ids: &[String],
+    ) -> Result<()> {
+        self.groups.register_group(group_id, None).await?;
+        let topic = group_sync_topic(group_id);
+        let mut seeded = false;
+        for via in via_profile_ids {
+            let Ok(public_key) = via.parse::<VerifyingKey>() else {
+                warn_invalid_profile_id(via);
+                continue;
+            };
+            if public_key == self.local_private_key.verifying_key() {
+                continue;
+            }
+            self.seed_bootstrap_with_relay(public_key, None).await?;
+            self.address_book
+                .add_topic(public_key, topic)
+                .await
+                .with_context(|| format!("failed to seed group topic peer {via}"))?;
+            seeded = true;
+        }
+        self.join_group_topic(group_id).await?;
+        if seeded && self.relay_url.is_some() {
+            tokio::time::sleep(Duration::from_millis(CONTACT_BOOTSTRAP_SETTLE_MILLIS)).await;
+            self.initiate_group_sessions(group_id).await?;
+        }
+        self.emit_group_state(group_id).await;
+        Ok(())
+    }
+
+    /// Re-nudges sync sessions for every joined group topic; the periodic
+    /// maintenance uses this so an offline Owner receives pending join
+    /// requests once they return (ADR-0005).
+    pub(crate) async fn nudge_group_sessions(&self) {
+        let group_ids: Vec<String> = self.group_streams.keys().cloned().collect();
+        for group_id in group_ids {
+            if let Err(err) = self.initiate_group_sessions(&group_id).await {
+                tracing::debug!("failed to nudge group {group_id}: {err:#}");
+            }
+        }
+    }
+
+    /// Joins the profile topics that members-only groups need for key
+    /// exchange, friendship or not: the Owner needs each joiner's key bundle
+    /// to welcome them (their bundle lives on their profile's Spaces log),
+    /// and members need the Owner's bundle to open the welcome (ADR-0015).
+    pub(crate) async fn sync_group_peer_profiles(&mut self) {
+        let group_ids = match self.groups.registered_groups().await {
+            Ok(group_ids) => group_ids,
+            Err(err) => {
+                tracing::debug!("failed to list groups for key exchange: {err:#}");
+                return;
+            }
+        };
+        let mut peers: Vec<String> = Vec::new();
+        for group_id in group_ids {
+            let Ok(Some(state)) = crate::groups::read_group_state(&self.domain, &group_id).await
+            else {
+                continue;
+            };
+            if state.content_mode != crate::groups::GroupContentMode::MembersOnly {
+                continue;
+            }
+            if state.permits(
+                &self.local_profile_id,
+                crate::groups::GroupPermission::Manage,
+            ) {
+                peers.extend(
+                    state
+                        .members
+                        .iter()
+                        .map(|member| member.profile_id.clone())
+                        .chain(
+                            state
+                                .pending_requests
+                                .iter()
+                                .map(|request| request.requester_profile_id.clone()),
+                        ),
+                );
+            } else if state.is_member(&self.local_profile_id)
+                || state.has_pending_request_from(&self.local_profile_id)
+            {
+                if let Some(owner) = state.owner() {
+                    peers.push(owner.profile_id.clone());
+                }
+            }
+        }
+        peers.sort();
+        peers.dedup();
+        for peer in peers {
+            if peer == self.local_profile_id || self.contact_streams.contains_key(&peer) {
+                continue;
+            }
+            if let Err(err) = self.sync_contact_profile(&peer).await {
+                tracing::debug!("failed to sync group peer {peer}: {err:#}");
+            }
+        }
+    }
+
+    /// Pushes operations the groups service appended (genesis, governance,
+    /// control messages, posts) into their groups' live gossip.
+    pub(crate) fn flush_groups_outbox(&self) {
+        flush_groups_outbox_shared(&self.groups, &self.group_handles);
+    }
+
+    /// Emits the group's viewer-filtered state to the UI, if known.
+    pub(crate) async fn emit_group_state(&self, group_id: &str) {
+        emit_group_state_shared(&self.groups, group_id, &self.event_tx).await;
+    }
+
+    /// Rejoins all known groups after startup, processes their control
+    /// backlog, and runs the Owner-side duties.
+    pub(crate) async fn resume_groups(&mut self) -> Result<()> {
+        let group_ids = self.groups.registered_groups().await?;
+        if group_ids.is_empty() {
+            return Ok(());
+        }
+        if let Err(err) = self.groups.process_backlog(&group_ids).await {
+            tracing::warn!("failed to process groups backlog: {err:#}");
+        }
+        for group_id in &group_ids {
+            if let Err(err) = self.join_group_topic(group_id).await {
+                tracing::warn!("failed to resume group {group_id}: {err:#}");
+            }
+            if let Err(err) = self.groups.process_owner_duties(group_id).await {
+                tracing::debug!("owner duties for {group_id} deferred: {err:#}");
+            }
+            self.emit_group_state(group_id).await;
+        }
+        if let Err(err) = self.reconcile_group_advertisements().await {
+            tracing::debug!("advertisement reconcile at startup deferred: {err:#}");
+        }
+        self.sync_group_peer_profiles().await;
+        self.emit_group_suggestions().await;
+        self.flush_groups_outbox();
+        Ok(())
+    }
+
+    /// Runs owner duties (auto-accepts, auth reconcile) for every known
+    /// group, keeps membership advertisements in step, and reflects any
+    /// changes. Idempotent background work.
+    pub(crate) async fn reconcile_groups(&mut self) -> Result<()> {
+        for group_id in self.groups.registered_groups().await? {
+            let changed = self
+                .groups
+                .process_owner_duties(&group_id)
+                .await
+                .unwrap_or(false);
+            self.flush_groups_outbox();
+            if changed {
+                self.emit_group_state(&group_id).await;
+            }
+        }
+        self.reconcile_group_advertisements().await
+    }
+
+    /// Aligns the friend-visible membership advertisements with reality:
+    /// one active advertisement per `listed` group the local profile is a
+    /// member of, carrying the current name; everything else retracted
+    /// (ADR-0008). Idempotent; a rename re-advertises under the new name.
+    pub(crate) async fn reconcile_group_advertisements(&mut self) -> Result<()> {
+        let Some(own) = self.read_profile_state(&self.local_profile_id).await? else {
+            return Ok(());
+        };
+        let current: HashMap<String, String> = own
+            .advertised_groups
+            .iter()
+            .map(|ad| (ad.group_id.clone(), ad.group_name.clone()))
+            .collect();
+        let mut desired: HashMap<String, String> = HashMap::new();
+        for group_id in self.groups.registered_groups().await? {
+            let Some(state) = crate::groups::read_group_state(&self.domain, &group_id).await?
+            else {
+                continue;
+            };
+            if state.is_member(&self.local_profile_id)
+                && state.discoverability == GroupDiscoverability::Listed
+            {
+                desired.insert(group_id, state.name.clone());
+            }
+        }
+
+        let now = crate::profile::now_unix_secs();
+        for (group_id, group_name) in &desired {
+            if current.get(group_id) != Some(group_name) {
+                self.publish(DomainOperation::GroupMembershipAdvertised {
+                    profile_id: self.local_profile_id.clone(),
+                    group_id: group_id.clone(),
+                    group_name: group_name.clone(),
+                    active: true,
+                    recorded_at: now,
+                })
+                .await?;
+            }
+        }
+        for (group_id, group_name) in &current {
+            if !desired.contains_key(group_id) {
+                self.publish(DomainOperation::GroupMembershipAdvertised {
+                    profile_id: self.local_profile_id.clone(),
+                    group_id: group_id.clone(),
+                    group_name: group_name.clone(),
+                    active: false,
+                    recorded_at: now,
+                })
+                .await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Recomputes and emits friend-based group suggestions.
+    pub(crate) async fn emit_group_suggestions(&self) {
+        emit_group_suggestions_shared(&self.domain, &self.local_profile_id, &self.event_tx).await;
+    }
+
     async fn seed_contact_bootstrap(&self, public_key: VerifyingKey) -> Result<()> {
         self.seed_bootstrap_with_relay(public_key, None).await
     }
@@ -657,6 +970,19 @@ fn spawn_topic_task(
                         }
                     }
                     emit_topic_state(&domain, &profile_id, &event_tx, is_local).await;
+                    // Only a friend's advertisement can change the hub
+                    // suggestions; skip the (own + every-friend + every-group)
+                    // fan-out for ordinary posts, hearts, and profile edits.
+                    let advertises_group = !is_local
+                        && operation.body.as_ref().is_some_and(|body| {
+                            matches!(
+                                decode_cbor::<DomainOperation, _>(&body.to_bytes()[..]),
+                                Ok(DomainOperation::GroupMembershipAdvertised { .. })
+                            )
+                        });
+                    if advertises_group {
+                        emit_group_suggestions_shared(&domain, &local_profile_id, &event_tx).await;
+                    }
                 }
                 TopicLogSyncEvent::SyncFinished { .. }
                 | TopicLogSyncEvent::LiveModeStarted
@@ -695,6 +1021,177 @@ fn spawn_topic_task(
             }
         }
     })
+}
+
+/// Ingests operations arriving on a group topic, feeds control messages to
+/// the groups service, runs the Owner-side duties, and reflects the group's
+/// new state to the UI.
+fn spawn_group_topic_task(
+    mut subscription: DomainSyncSubscription,
+    store: DomainStore,
+    group_id: String,
+    event_tx: Sender<NetworkEvent>,
+    groups: JynGroups,
+    group_handles: GroupHandles,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut domain = JynOperationDomain::new(store);
+
+        async fn after_change(
+            domain: &JynOperationDomain,
+            groups: &JynGroups,
+            group_id: &str,
+            group_handles: &GroupHandles,
+            event_tx: &Sender<NetworkEvent>,
+        ) {
+            // Owner-side duties: auto-accept open joins, reconcile the auth
+            // layer. A no-op on every other node.
+            if let Err(err) = groups.process_owner_duties(group_id).await {
+                tracing::debug!(group_id, "owner duties deferred: {err:#}");
+            }
+            flush_groups_outbox_shared(groups, group_handles);
+            emit_group_state_shared(groups, group_id, event_tx).await;
+            // The viewer's own membership shapes the suggestions (a joined
+            // group stops being one).
+            emit_group_suggestions_shared(domain, groups.local_profile_id(), event_tx).await;
+        }
+
+        // Backlog catch-up delivers each stored op as its own
+        // `OperationReceived` followed by one batch-completion event. Running
+        // the (expensive) duties+reduce+emit per backlog op is O(ops²); once
+        // live we pay it per op, but during catch-up we defer to the single
+        // batch-completion pass below.
+        let mut live = false;
+        while let Some(message) = subscription.next().await {
+            let Ok(message) = message else {
+                continue;
+            };
+
+            match message.event {
+                TopicLogSyncEvent::OperationReceived { operation, .. } => {
+                    let operation = *operation;
+                    if let Err(err) = domain.ingest_remote_operation(operation.clone()).await {
+                        tracing::warn!(
+                            group_id,
+                            "failed to ingest synced group operation: {err:#}"
+                        );
+                        continue;
+                    }
+                    if let Err(err) = groups.ingest(&operation).await {
+                        tracing::warn!(group_id, "group control processing failed: {err:#}");
+                    }
+                    if live {
+                        after_change(&domain, &groups, &group_id, &group_handles, &event_tx).await;
+                    }
+                }
+                TopicLogSyncEvent::SyncFinished { .. }
+                | TopicLogSyncEvent::LiveModeStarted
+                | TopicLogSyncEvent::SessionFinished { .. } => {
+                    if let Err(err) = groups.drain_pending().await {
+                        tracing::warn!(group_id, "group control drain failed: {err:#}");
+                    }
+                    // Caught up: fold the whole backlog once, and pay per-op
+                    // from here on so live gossip still updates promptly.
+                    live = true;
+                    after_change(&domain, &groups, &group_id, &group_handles, &event_tx).await;
+                }
+                TopicLogSyncEvent::Failed { error } => {
+                    tracing::warn!(group_id, "group LogSync replication failed: {error}");
+                }
+                TopicLogSyncEvent::SessionStarted | TopicLogSyncEvent::SyncStarted { .. } => {}
+            }
+        }
+    })
+}
+
+fn flush_groups_outbox_shared(groups: &JynGroups, group_handles: &GroupHandles) {
+    for (group_id, operation) in groups.drain_outbox() {
+        let handle = group_handles
+            .read()
+            .expect("group handles lock poisoned")
+            .get(&group_id)
+            .cloned();
+        match handle {
+            Some(handle) => {
+                if let Err(err) = handle.publish(operation) {
+                    tracing::warn!(group_id, "failed to publish group operation live: {err}");
+                }
+            }
+            // Persisted and syncable regardless; the next session serves it.
+            None => tracing::debug!(group_id, "no live handle for group operation yet"),
+        }
+    }
+}
+
+async fn emit_group_state_shared(
+    groups: &JynGroups,
+    group_id: &str,
+    event_tx: &Sender<NetworkEvent>,
+) {
+    match groups.group_view(group_id).await {
+        Ok(Some(view)) => {
+            // We just reduced the genesis; record its content mode so the
+            // blob-secret scan can skip this group when it's public.
+            if let Err(err) = groups
+                .record_content_kind(group_id, view.content_mode)
+                .await
+            {
+                tracing::debug!(group_id, "failed to record group content kind: {err:#}");
+            }
+            let _ = event_tx.send(NetworkEvent::GroupUpdated { view });
+        }
+        Ok(None) => {}
+        Err(err) => {
+            tracing::warn!(group_id, "failed to reduce group state: {err:#}");
+        }
+    }
+}
+
+fn warn_invalid_profile_id(profile_id: &str) {
+    tracing::warn!("skipping invalid profile id {profile_id}");
+}
+
+/// Aggregates friends' membership advertisements into hub suggestions:
+/// groups the viewer's *own friends* are in (never strangers', ADR-0008)
+/// that the viewer has not joined. Emitted as a full snapshot.
+async fn emit_group_suggestions_shared(
+    domain: &JynOperationDomain,
+    local_profile_id: &str,
+    event_tx: &Sender<NetworkEvent>,
+) {
+    let own = match domain.read_profile_state(local_profile_id).await {
+        Ok(Some(own)) => own,
+        _ => return,
+    };
+    let mut by_group: std::collections::BTreeMap<String, (String, Vec<String>)> =
+        std::collections::BTreeMap::new();
+    for friend_id in &own.followed_profile_ids {
+        let Ok(Some(friend)) = domain.read_profile_state(friend_id).await else {
+            continue;
+        };
+        for ad in &friend.advertised_groups {
+            let entry = by_group
+                .entry(ad.group_id.clone())
+                .or_insert_with(|| (ad.group_name.clone(), Vec::new()));
+            entry.1.push(friend_id.clone());
+        }
+    }
+
+    let mut suggestions = Vec::new();
+    for (group_id, (group_name, via)) in by_group {
+        // Groups the viewer already belongs to are not suggestions.
+        if let Ok(Some(state)) = crate::groups::read_group_state(domain, &group_id).await {
+            if state.is_member(local_profile_id) {
+                continue;
+            }
+        }
+        suggestions.push(GroupSuggestion {
+            group_id,
+            group_name,
+            via_friend_profile_ids: via,
+        });
+    }
+    let _ = event_tx.send(NetworkEvent::GroupSuggestionsUpdated { suggestions });
 }
 
 async fn emit_topic_state(

@@ -16,6 +16,9 @@ use crate::diagnostics::{
     PeerDiscoveryMethod, PeerSnapshot,
 };
 use crate::domain::{DomainOperation, ReducedPost, ReducedProfileState, Visibility};
+use crate::groups::{
+    GroupContentMode, GroupDiscoverability, GroupJoinMode, GroupRole, GroupSuggestion, GroupView,
+};
 use crate::local_stores::{KeepsStore, OutgoingRequestsStore, PrivatePostsStore};
 use crate::node::{AppNode, NodeOptions};
 use crate::profile::{now_unix_secs, ProfileStore, UserProfile};
@@ -41,6 +44,17 @@ pub struct MediaDraft {
 pub struct PostDraft {
     pub body: String,
     pub visibility: Visibility,
+    /// Lifetime in seconds from now; `None` = permanent.
+    pub lifetime_secs: Option<u64>,
+    pub media: Vec<MediaDraft>,
+}
+
+/// A post being cast from a Group's in-group composer: no visibility dial —
+/// the Group's Content mode is the fixed visibility; lifetime stays a
+/// per-post author choice.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroupPostDraft {
+    pub body: String,
     /// Lifetime in seconds from now; `None` = permanent.
     pub lifetime_secs: Option<u64>,
     pub media: Vec<MediaDraft>,
@@ -146,6 +160,97 @@ pub enum NetworkCommand {
     /// Drop expired private posts from disk (replicated posts expire by
     /// read-time filtering; kept copies are pruned from the keeps store).
     DrainExpired,
+    /// Create a Group; the creator becomes its Owner. Content mode is fixed
+    /// forever at this moment (ADR-0006).
+    CreateGroup {
+        name: String,
+        content_mode: GroupContentMode,
+        join_mode: GroupJoinMode,
+        discoverability: GroupDiscoverability,
+    },
+    /// Join a group's replication topic without membership — the visit-only
+    /// read path for public groups, and the first step of joining.
+    /// `via_profile_ids` seed reach (the Owner, or the friend whose
+    /// suggestion/heart pointed here).
+    SyncGroup {
+        group_id: String,
+        via_profile_ids: Vec<String>,
+    },
+    /// Ask to join. In Open mode the Owner's node auto-accepts; in Request
+    /// mode this stays pending until the Owner answers (ADR-0005).
+    JoinGroup {
+        group_id: String,
+        greeting: Option<String>,
+        via_profile_ids: Vec<String>,
+    },
+    /// Owner answers a pending join request. Declining is a local-only
+    /// record — never a public op (ADR-0002).
+    RespondGroupJoin {
+        group_id: String,
+        requester_profile_id: String,
+        accept: bool,
+    },
+    PublishGroupPost {
+        group_id: String,
+        draft: GroupPostDraft,
+    },
+    EditGroupPost {
+        group_id: String,
+        post_id: String,
+        body: String,
+        kept_media: Vec<crate::domain::MediaAttachment>,
+        new_media: Vec<MediaDraft>,
+    },
+    DeleteGroupPost {
+        group_id: String,
+        post_id: String,
+    },
+    SetGroupPostLifetime {
+        group_id: String,
+        post_id: String,
+        expires_at: Option<u64>,
+    },
+    /// Owner edits name / Join mode / Discoverability; `None` leaves a
+    /// field untouched. Content mode has no edit path.
+    EditGroupMetadata {
+        group_id: String,
+        name: Option<String>,
+        join_mode: Option<GroupJoinMode>,
+        discoverability: Option<GroupDiscoverability>,
+    },
+    RemoveGroupMember {
+        group_id: String,
+        member_profile_id: String,
+    },
+    /// Moves the `Manage` role to another Member (ADR-0003); the old Owner
+    /// stays a plain Member until they leave.
+    TransferGroupOwnership {
+        group_id: String,
+        to_profile_id: String,
+    },
+    LeaveGroup {
+        group_id: String,
+    },
+    SetGroupHeart {
+        group_id: String,
+        post_author_profile_id: String,
+        post_id: String,
+        active: bool,
+    },
+    PublishGroupComment {
+        group_id: String,
+        post_author_profile_id: String,
+        post_id: String,
+        body: String,
+    },
+    /// Records that the viewer opened the group place, clearing its river
+    /// digest door (ADR-0010).
+    MarkGroupOpened {
+        group_id: String,
+    },
+    /// Runs the Owner-side duties (open-join auto-accepts, auth reconcile)
+    /// across all known groups. Idempotent background work.
+    ReconcileGroups,
 }
 
 impl NetworkCommand {
@@ -166,14 +271,30 @@ impl NetworkCommand {
             | Self::PublishComment { .. }
             | Self::KeepPost { .. }
             | Self::ReleaseKeep { .. }
-            | Self::ExportBackup { .. } => true,
+            | Self::ExportBackup { .. }
+            | Self::CreateGroup { .. }
+            | Self::JoinGroup { .. }
+            | Self::RespondGroupJoin { .. }
+            | Self::PublishGroupPost { .. }
+            | Self::EditGroupPost { .. }
+            | Self::DeleteGroupPost { .. }
+            | Self::SetGroupPostLifetime { .. }
+            | Self::EditGroupMetadata { .. }
+            | Self::RemoveGroupMember { .. }
+            | Self::TransferGroupOwnership { .. }
+            | Self::LeaveGroup { .. }
+            | Self::SetGroupHeart { .. }
+            | Self::PublishGroupComment { .. } => true,
             Self::RecoverStartup
             | Self::RequestDiagnostics
             | Self::SyncContactProfile { .. }
             | Self::ReconcileSpaces
             | Self::FollowBack { .. }
             | Self::FetchMedia { .. }
-            | Self::DrainExpired => false,
+            | Self::DrainExpired
+            | Self::SyncGroup { .. }
+            | Self::MarkGroupOpened { .. }
+            | Self::ReconcileGroups => false,
         }
     }
 
@@ -201,6 +322,22 @@ impl NetworkCommand {
             Self::ReleaseKeep { .. } => "releasing the keep",
             Self::FetchMedia { .. } => "fetching media",
             Self::DrainExpired => "draining expired posts",
+            Self::CreateGroup { .. } => "creating the group",
+            Self::SyncGroup { .. } => "syncing the group",
+            Self::JoinGroup { .. } => "joining the group",
+            Self::RespondGroupJoin { .. } => "answering the join request",
+            Self::PublishGroupPost { .. } => "casting into the group",
+            Self::EditGroupPost { .. } => "editing the group post",
+            Self::DeleteGroupPost { .. } => "deleting the group post",
+            Self::SetGroupPostLifetime { .. } => "changing the group post lifetime",
+            Self::EditGroupMetadata { .. } => "updating the group",
+            Self::RemoveGroupMember { .. } => "removing the member",
+            Self::TransferGroupOwnership { .. } => "transferring ownership",
+            Self::LeaveGroup { .. } => "leaving the group",
+            Self::SetGroupHeart { .. } => "casting the heart",
+            Self::PublishGroupComment { .. } => "publishing the comment",
+            Self::MarkGroupOpened { .. } => "recording the group visit",
+            Self::ReconcileGroups => "updating groups",
         }
     }
 }
@@ -232,6 +369,15 @@ pub enum NetworkEvent {
     /// The full keeps list after any change or lease pruning.
     KeepsUpdated {
         keeps: Vec<crate::local_stores::KeepRecord>,
+    },
+    /// A group's state changed, as the local viewer may see it (roster
+    /// follows Content mode; pending requests are Owner-only).
+    GroupUpdated {
+        view: GroupView,
+    },
+    /// The friend-based group suggestions changed (full snapshot).
+    GroupSuggestionsUpdated {
+        suggestions: Vec<GroupSuggestion>,
     },
     /// A fetched (or freshly cast) attachment blob is available locally.
     MediaReady {
@@ -300,6 +446,10 @@ impl AsyncBridge {
             .spawn(move || {
                 let runtime = match tokio::runtime::Builder::new_multi_thread()
                     .enable_all()
+                    // The pinned p2panda auth resolver recurses deeply over
+                    // the shared auth graph once several groups/spaces
+                    // exist; the 2 MiB default worker stack overflows.
+                    .thread_stack_size(16 * 1024 * 1024)
                     .build()
                 {
                     Ok(runtime) => runtime,
@@ -557,6 +707,19 @@ fn spawn_sync_maintenance(
                     tracing::debug!("periodic re-sync with {profile_id} failed: {err:#}");
                 }
             }
+
+            // Group topics: re-nudge sessions so pending joins reach an
+            // Owner who was offline, and members catch up on group traffic;
+            // then run the idempotent group upkeep (owner duties, membership
+            // advertisements).
+            {
+                let mut sync_guard = sync.lock().await;
+                sync_guard.nudge_group_sessions().await;
+                sync_guard.sync_group_peer_profiles().await;
+                if let Err(err) = sync_guard.reconcile_groups().await {
+                    tracing::debug!("periodic group reconcile failed: {err:#}");
+                }
+            }
         }
     })
 }
@@ -640,6 +803,8 @@ async fn default_handle_command(
                 post_id: post_id.clone(),
                 active,
                 recorded_at: now_unix_secs(),
+                group_id: None,
+                group_name: None,
             };
             publish_interaction(&state, &post_author_profile_id, &post_id, operation).await
         }
@@ -680,7 +845,444 @@ async fn default_handle_command(
         }
         NetworkCommand::FetchMedia { blob_hash } => fetch_media(&state, &event_tx, blob_hash).await,
         NetworkCommand::DrainExpired => drain_expired(&state, &event_tx).await,
+        NetworkCommand::CreateGroup {
+            name,
+            content_mode,
+            join_mode,
+            discoverability,
+        } => {
+            let mut sync = state.sync.lock().await;
+            let group_id = sync
+                .groups()
+                .create_group(
+                    &name,
+                    content_mode,
+                    join_mode,
+                    discoverability,
+                    now_unix_secs(),
+                )
+                .await?;
+            sync.join_group_topic(&group_id).await?;
+            if let Err(err) = sync.reconcile_group_advertisements().await {
+                tracing::debug!("advertisement after create deferred: {err:#}");
+            }
+            sync.flush_groups_outbox();
+            sync.emit_group_state(&group_id).await;
+            Ok(())
+        }
+        NetworkCommand::SyncGroup {
+            group_id,
+            via_profile_ids,
+        } => {
+            let mut sync = state.sync.lock().await;
+            sync.sync_group(&group_id, &via_profile_ids).await
+        }
+        NetworkCommand::JoinGroup {
+            group_id,
+            greeting,
+            via_profile_ids,
+        } => {
+            let display_name = state.profile.lock().await.profile().display_name.clone();
+            let mut sync = state.sync.lock().await;
+            sync.sync_group(&group_id, &via_profile_ids).await?;
+            sync.groups()
+                .request_join(&group_id, &display_name, greeting, now_unix_secs())
+                .await?;
+            // A members-only join needs the Owner's key bundle to open the
+            // welcome; start fetching their profile right away.
+            sync.sync_group_peer_profiles().await;
+            sync.flush_groups_outbox();
+            sync.emit_group_state(&group_id).await;
+            Ok(())
+        }
+        NetworkCommand::RespondGroupJoin {
+            group_id,
+            requester_profile_id,
+            accept,
+        } => {
+            let mut sync = state.sync.lock().await;
+            if accept {
+                sync.groups()
+                    .govern(
+                        &group_id,
+                        crate::groups::GroupGovernanceAction::AddMember {
+                            member_profile_id: requester_profile_id,
+                            roles: vec![GroupRole::Member],
+                        },
+                        now_unix_secs(),
+                    )
+                    .await?;
+            } else {
+                sync.groups()
+                    .deny_request(&group_id, &requester_profile_id)
+                    .await?;
+            }
+            // A members-only admission needs the joiner's key bundle;
+            // start fetching their profile right away.
+            sync.sync_group_peer_profiles().await;
+            sync.flush_groups_outbox();
+            sync.emit_group_state(&group_id).await;
+            Ok(())
+        }
+        NetworkCommand::PublishGroupPost { group_id, draft } => {
+            publish_group_post(&state, &event_tx, group_id, draft).await
+        }
+        NetworkCommand::EditGroupPost {
+            group_id,
+            post_id,
+            body,
+            kept_media,
+            new_media,
+        } => {
+            edit_group_post(
+                &state, &event_tx, group_id, post_id, body, kept_media, new_media,
+            )
+            .await
+        }
+        NetworkCommand::DeleteGroupPost { group_id, post_id } => {
+            let sync = state.sync.lock().await;
+            sync.groups()
+                .publish_to_group(
+                    &group_id,
+                    DomainOperation::PostDeleted {
+                        profile_id: state.local_profile_id.clone(),
+                        post_id: post_id.clone(),
+                        deleted_at: now_unix_secs(),
+                    },
+                )
+                .await?;
+            sync.flush_groups_outbox();
+            sync.emit_group_state(&group_id).await;
+            drop(sync);
+            unpin_and_prune_prefix(&state, &format!("feed/{post_id}/")).await;
+            Ok(())
+        }
+        NetworkCommand::SetGroupPostLifetime {
+            group_id,
+            post_id,
+            expires_at,
+        } => {
+            let sync = state.sync.lock().await;
+            // A lifetime change re-homes the post (ADR-0016, group-scoped
+            // per ADR-0018): a marker into the old bucket — laid first,
+            // while the old copy is still the post's current one — disowns
+            // that copy, so GC neither keeps the old bucket alive for it
+            // nor reclaims media the live copy still references; then a
+            // self-contained snapshot carries the post's state into the new
+            // expiry bucket. The group reducer picks the newest publication
+            // per post id, so the snapshot supersedes the old copy.
+            let post = sync
+                .groups()
+                .group_view(&group_id)
+                .await?
+                .with_context(|| format!("unknown group {group_id}"))?
+                .posts
+                .into_iter()
+                .find(|post| post.post_id == post_id && post.profile_id == state.local_profile_id)
+                .with_context(|| format!("post {post_id} not found or not ours"))?;
+            if post.expires_at == expires_at {
+                return Ok(());
+            }
+            sync.groups()
+                .publish_to_group(
+                    &group_id,
+                    DomainOperation::PostRehomed {
+                        profile_id: state.local_profile_id.clone(),
+                        post_id: post_id.clone(),
+                        moved_at: now_unix_secs(),
+                    },
+                )
+                .await?;
+            sync.groups()
+                .publish_to_group(
+                    &group_id,
+                    DomainOperation::PostPublished {
+                        profile_id: post.profile_id,
+                        post_id: post.post_id,
+                        body: post.body,
+                        media: post.media,
+                        visibility: post.visibility,
+                        expires_at,
+                        created_at: post.created_at,
+                        edited: post.edited,
+                    },
+                )
+                .await?;
+            sync.flush_groups_outbox();
+            sync.emit_group_state(&group_id).await;
+            Ok(())
+        }
+        NetworkCommand::EditGroupMetadata {
+            group_id,
+            name,
+            join_mode,
+            discoverability,
+        } => {
+            let mut sync = state.sync.lock().await;
+            sync.groups()
+                .govern(
+                    &group_id,
+                    crate::groups::GroupGovernanceAction::EditMetadata {
+                        name,
+                        join_mode,
+                        discoverability,
+                    },
+                    now_unix_secs(),
+                )
+                .await?;
+            if let Err(err) = sync.reconcile_group_advertisements().await {
+                tracing::debug!("advertisement after metadata edit deferred: {err:#}");
+            }
+            sync.flush_groups_outbox();
+            sync.emit_group_state(&group_id).await;
+            Ok(())
+        }
+        NetworkCommand::RemoveGroupMember {
+            group_id,
+            member_profile_id,
+        } => {
+            let sync = state.sync.lock().await;
+            sync.groups()
+                .govern(
+                    &group_id,
+                    crate::groups::GroupGovernanceAction::RemoveMember { member_profile_id },
+                    now_unix_secs(),
+                )
+                .await?;
+            sync.flush_groups_outbox();
+            sync.emit_group_state(&group_id).await;
+            Ok(())
+        }
+        NetworkCommand::TransferGroupOwnership {
+            group_id,
+            to_profile_id,
+        } => {
+            let sync = state.sync.lock().await;
+            sync.groups()
+                .transfer_ownership(&group_id, &to_profile_id, now_unix_secs())
+                .await?;
+            sync.flush_groups_outbox();
+            sync.emit_group_state(&group_id).await;
+            Ok(())
+        }
+        NetworkCommand::LeaveGroup { group_id } => {
+            let mut sync = state.sync.lock().await;
+            sync.groups().leave(&group_id, now_unix_secs()).await?;
+            if let Err(err) = sync.reconcile_group_advertisements().await {
+                tracing::debug!("advertisement after leave deferred: {err:#}");
+            }
+            sync.flush_groups_outbox();
+            sync.emit_group_state(&group_id).await;
+            Ok(())
+        }
+        NetworkCommand::SetGroupHeart {
+            group_id,
+            post_author_profile_id,
+            post_id,
+            active,
+        } => {
+            let mut sync = state.sync.lock().await;
+            let view = sync
+                .groups()
+                .group_view(&group_id)
+                .await?
+                .with_context(|| format!("unknown group {group_id}"))?;
+            // The in-group named like, always.
+            sync.groups()
+                .publish_to_group(
+                    &group_id,
+                    DomainOperation::HeartChanged {
+                        profile_id: state.local_profile_id.clone(),
+                        post_author_profile_id: post_author_profile_id.clone(),
+                        post_id: post_id.clone(),
+                        active,
+                        recorded_at: now_unix_secs(),
+                        group_id: None,
+                        group_name: None,
+                    },
+                )
+                .await?;
+            // Outward heart-discovery iff Content mode = Public AND
+            // Discoverability = listed (ADR-0009): the same heart, with
+            // group context, on the hearter's friend-visible profile log.
+            // An un-heart also retracts an earlier outward heart even if
+            // the group has since gone unlisted.
+            let outward_now = view.content_mode == GroupContentMode::Public
+                && view.discoverability == GroupDiscoverability::Listed;
+            let outward_before = sync
+                .read_profile_state(&state.local_profile_id)
+                .await?
+                .is_some_and(|own| {
+                    own.hearts.iter().any(|heart| {
+                        heart.post_id == post_id
+                            && heart.post_author_profile_id == post_author_profile_id
+                            && heart.group_id.is_some()
+                    })
+                });
+            if (active && outward_now) || (!active && outward_before) {
+                sync.publish(DomainOperation::HeartChanged {
+                    profile_id: state.local_profile_id.clone(),
+                    post_author_profile_id,
+                    post_id,
+                    active,
+                    recorded_at: now_unix_secs(),
+                    group_id: Some(group_id.clone()),
+                    group_name: Some(view.name.clone()),
+                })
+                .await?;
+            }
+            // Own activity implies presence: hearting a post shouldn't raise a
+            // "new activity" door in the hearter's own river.
+            sync.groups()
+                .mark_opened(&group_id, now_unix_secs())
+                .await?;
+            sync.flush_groups_outbox();
+            sync.emit_group_state(&group_id).await;
+            Ok(())
+        }
+        NetworkCommand::PublishGroupComment {
+            group_id,
+            post_author_profile_id,
+            post_id,
+            body,
+        } => {
+            anyhow::ensure!(!body.trim().is_empty(), "a comment needs some words");
+            let now = now_unix_secs();
+            let comment_id = new_post_id(&state.local_profile_id, now);
+            let sync = state.sync.lock().await;
+            sync.groups()
+                .publish_to_group(
+                    &group_id,
+                    DomainOperation::CommentPublished {
+                        profile_id: state.local_profile_id.clone(),
+                        comment_id,
+                        post_author_profile_id,
+                        post_id,
+                        body: body.trim().to_owned(),
+                        created_at: now,
+                    },
+                )
+                .await?;
+            // Own activity implies presence: don't raise a "new activity"
+            // door in the author's own river for the comment they just wrote.
+            sync.groups().mark_opened(&group_id, now).await?;
+            sync.flush_groups_outbox();
+            sync.emit_group_state(&group_id).await;
+            Ok(())
+        }
+        NetworkCommand::MarkGroupOpened { group_id } => {
+            let sync = state.sync.lock().await;
+            sync.groups()
+                .mark_opened(&group_id, now_unix_secs())
+                .await?;
+            sync.emit_group_state(&group_id).await;
+            Ok(())
+        }
+        NetworkCommand::ReconcileGroups => {
+            let mut sync = state.sync.lock().await;
+            sync.reconcile_groups().await
+        }
     }
+}
+
+/// Casts a post into a Group: the Group's fixed Content mode decides how
+/// attachments are protected; there is no per-post visibility.
+async fn publish_group_post(
+    state: &RuntimeState,
+    event_tx: &Sender<NetworkEvent>,
+    group_id: String,
+    draft: GroupPostDraft,
+) -> Result<()> {
+    anyhow::ensure!(
+        !draft.body.trim().is_empty() || !draft.media.is_empty(),
+        "a post needs some words or something attached"
+    );
+    let now = now_unix_secs();
+    let post_id = new_post_id(&state.local_profile_id, now);
+    let expires_at = draft.lifetime_secs.map(|secs| now + secs);
+
+    // Read the Content mode under a short lock, then import (blocking file
+    // read + encrypt) with the lock released, so a large attachment doesn't
+    // stall every other command — mirroring the profile publish path.
+    let encrypt = {
+        let sync = state.sync.lock().await;
+        let view = sync
+            .groups()
+            .group_view(&group_id)
+            .await?
+            .with_context(|| format!("unknown group {group_id}"))?;
+        view.content_mode == GroupContentMode::MembersOnly
+    };
+    let media = import_attachments(state, event_tx, &post_id, &draft.media, encrypt).await?;
+
+    let sync = state.sync.lock().await;
+    sync.groups()
+        .publish_to_group(
+            &group_id,
+            DomainOperation::PostPublished {
+                profile_id: state.local_profile_id.clone(),
+                post_id,
+                body: draft.body,
+                media,
+                visibility: Visibility::Public,
+                expires_at,
+                created_at: now,
+                edited: false,
+            },
+        )
+        .await?;
+    // Own activity implies presence: don't raise a "new activity" door in the
+    // author's own river for the post they just cast.
+    sync.groups().mark_opened(&group_id, now).await?;
+    sync.flush_groups_outbox();
+    sync.emit_group_state(&group_id).await;
+    Ok(())
+}
+
+async fn edit_group_post(
+    state: &RuntimeState,
+    event_tx: &Sender<NetworkEvent>,
+    group_id: String,
+    post_id: String,
+    body: String,
+    kept_media: Vec<crate::domain::MediaAttachment>,
+    new_media: Vec<MediaDraft>,
+) -> Result<()> {
+    // Import (blocking read + encrypt) with the lock released; only the read
+    // of the Content mode and the publish need it held.
+    let encrypt = {
+        let sync = state.sync.lock().await;
+        let view = sync
+            .groups()
+            .group_view(&group_id)
+            .await?
+            .with_context(|| format!("unknown group {group_id}"))?;
+        view.content_mode == GroupContentMode::MembersOnly
+    };
+
+    let mut media = kept_media;
+    media.extend(import_attachments(state, event_tx, &post_id, &new_media, encrypt).await?);
+    anyhow::ensure!(
+        !body.trim().is_empty() || !media.is_empty(),
+        "a post needs some words or something attached"
+    );
+
+    let sync = state.sync.lock().await;
+    sync.groups()
+        .publish_to_group(
+            &group_id,
+            DomainOperation::PostEdited {
+                profile_id: state.local_profile_id.clone(),
+                post_id,
+                body,
+                media: Some(media),
+                edited_at: now_unix_secs(),
+            },
+        )
+        .await?;
+    sync.flush_groups_outbox();
+    sync.emit_group_state(&group_id).await;
+    Ok(())
 }
 
 /// The visibility of a post as its author currently replicates it, from the
@@ -1048,6 +1650,16 @@ async fn find_blob_secret(state: &RuntimeState, blob_hash: &str) -> Result<Optio
             }
         }
     }
+    // Members-only group posts seal their blobs too; the secret rides in
+    // the decrypted post payload inside the group state. Public groups never
+    // seal a blob, so scanning them would reduce their logs for nothing.
+    for group_id in sync.groups().members_only_groups().await? {
+        if let Some(view) = sync.groups().group_view(&group_id).await? {
+            if let Some(secret) = secret_in(&view.posts) {
+                return Ok(Some(secret));
+            }
+        }
+    }
     drop(sync);
 
     if let Some(secret) = secret_in(&state.private_posts.list()?) {
@@ -1372,6 +1984,12 @@ async fn recover_startup(state: &RuntimeState, event_tx: &Sender<NetworkEvent>) 
     }
     if let Err(err) = sync.reconcile_spaces().await {
         tracing::warn!("failed to reconcile spaces at startup: {err:#}");
+    }
+    // Groups: rejoin every known group topic, process the control backlog,
+    // run Owner duties (an offline Owner admits pending joiners here), and
+    // surface the states.
+    if let Err(err) = sync.resume_groups().await {
+        tracing::warn!("failed to resume groups at startup: {err:#}");
     }
     drop(sync);
 
@@ -1963,6 +2581,97 @@ async fn drain_expired(state: &RuntimeState, event_tx: &Sender<NetworkEvent>) ->
             Ok(freed) => reclaim_dropped_content(state, freed).await,
             Err(err) => {
                 tracing::warn!("failed to drop drained buckets on {topic_profile_id}: {err:#}")
+            }
+        }
+    }
+
+    // Group topics get the same treatment (ADR-0018), keyed by each group's
+    // own dead set. Members-only posts are additionally payload-erased at
+    // expiry — every member's stored copy, ours included — matching the
+    // ephemerality promise of non-public profile posts; public group posts
+    // are plaintext by design and leave at bucket drop. Best-effort per
+    // group, like the per-contact loops above.
+    let group_ids = {
+        let sync = state.sync.lock().await;
+        sync.groups()
+            .registered_groups()
+            .await
+            .unwrap_or_else(|err| {
+                tracing::warn!("failed to list groups for GC: {err:#}");
+                Vec::new()
+            })
+    };
+    let members_only: std::collections::HashSet<String> = {
+        let sync = state.sync.lock().await;
+        sync.groups()
+            .members_only_groups()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .collect()
+    };
+    for group_id in &group_ids {
+        let sync = state.sync.lock().await;
+        let dead = match sync.groups().dead_post_targets(group_id, now).await {
+            Ok(dead) => dead,
+            Err(err) => {
+                tracing::warn!("failed to compute dead set for group {group_id}: {err:#}");
+                continue;
+            }
+        };
+        if members_only.contains(group_id) {
+            let expired: Vec<crate::domain::ReducedPost> =
+                match sync.groups().group_view(group_id).await {
+                    Ok(Some(view)) => view
+                        .posts
+                        .into_iter()
+                        .filter(|post| post.is_expired(now))
+                        .collect(),
+                    Ok(None) => Vec::new(),
+                    Err(err) => {
+                        tracing::warn!(
+                            "failed to read group {group_id} for expiry teardown: {err:#}"
+                        );
+                        Vec::new()
+                    }
+                };
+            drop(sync);
+            for post in &expired {
+                if post.profile_id == state.local_profile_id {
+                    unpin_and_prune_prefix(state, &format!("feed/{}/", post.post_id)).await;
+                } else {
+                    for attachment in &post.media {
+                        crate::media::prune_cached(&state.media_cache_dir, &attachment.blob_hash);
+                        if let Ok(hash) = attachment.blob_hash.parse::<p2panda_blobs::Hash>() {
+                            state.node.blobs.block_serving_hashes([hash]);
+                        }
+                    }
+                }
+                let sync = state.sync.lock().await;
+                // The ops live on the group topic, so the erase walks the
+                // group audience — this strips every member's stored copy.
+                if let Err(err) = sync.erase_post_content(group_id, &post.post_id).await {
+                    tracing::warn!(
+                        "failed to erase expired group post {}: {err:#}",
+                        post.post_id
+                    );
+                }
+            }
+        } else {
+            drop(sync);
+        }
+
+        let sync = state.sync.lock().await;
+        if let Err(err) = sync.reap_reactions_for_dead_targets(group_id, &dead).await {
+            tracing::warn!("failed to reap reactions in group {group_id}: {err:#}");
+        }
+        match sync.drop_drained_buckets(group_id, now, &dead).await {
+            Ok(freed) => {
+                drop(sync);
+                reclaim_dropped_content(state, freed).await;
+            }
+            Err(err) => {
+                tracing::warn!("failed to drop drained buckets in group {group_id}: {err:#}")
             }
         }
     }

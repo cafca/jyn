@@ -14,6 +14,9 @@ import 'domain.dart';
 import 'frb_generated.dart';
 import 'frb_generated.io.dart'
     if (dart.library.js_interop) 'frb_generated.web.dart';
+import 'groups.dart';
+import 'groups/reduce.dart';
+import 'groups/service.dart';
 import 'media.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'profile.dart';
@@ -76,7 +79,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => -79869872;
+  int get rustContentHash => -787893789;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -88,7 +91,34 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
 }
 
 abstract class RustLibApi extends BaseApi {
+  Future<void> crateApiCommandsCreateGroup({
+    required String name,
+    required GroupContentMode contentMode,
+    required GroupJoinMode joinMode,
+    required GroupDiscoverability discoverability,
+  });
+
+  Future<void> crateApiCommandsDeleteGroupPost({
+    required String groupId,
+    required String postId,
+  });
+
   Future<void> crateApiCommandsDeletePost({required String postId});
+
+  Future<void> crateApiCommandsEditGroupMetadata({
+    required String groupId,
+    String? name,
+    GroupJoinMode? joinMode,
+    GroupDiscoverability? discoverability,
+  });
+
+  Future<void> crateApiCommandsEditGroupPost({
+    required String groupId,
+    required String postId,
+    required String body,
+    required List<MediaAttachment> keptMedia,
+    required List<MediaDraftInput> newMedia,
+  });
 
   Future<void> crateApiCommandsEditPost({
     required String postId,
@@ -107,12 +137,22 @@ abstract class RustLibApi extends BaseApi {
 
   Future<bool> crateApiLifecycleIsFreshInstall();
 
+  Future<void> crateApiCommandsJoinGroup({
+    required String groupId,
+    String? greeting,
+    required List<String> viaProfileIds,
+  });
+
   Future<void> crateApiCommandsKeepPost({
     required String postAuthorProfileId,
     required String postId,
   });
 
+  Future<void> crateApiCommandsLeaveGroup({required String groupId});
+
   Future<String?> crateApiMediaLocalMediaPath({required String blobHash});
+
+  Future<void> crateApiCommandsMarkGroupOpened({required String groupId});
 
   Future<String> crateApiLifecycleMyFriendCode();
 
@@ -122,6 +162,20 @@ abstract class RustLibApi extends BaseApi {
     required String postAuthorProfileId,
     required String postId,
     required String body,
+  });
+
+  Future<void> crateApiCommandsPublishGroupComment({
+    required String groupId,
+    required String postAuthorProfileId,
+    required String postId,
+    required String body,
+  });
+
+  Future<void> crateApiCommandsPublishGroupPost({
+    required String groupId,
+    required String body,
+    int? lifetimeSecs,
+    required List<MediaDraftInput> media,
   });
 
   Future<void> crateApiCommandsPublishPost({
@@ -140,6 +194,11 @@ abstract class RustLibApi extends BaseApi {
 
   Future<void> crateApiCommandsRemoveFriend({required String profileId});
 
+  Future<void> crateApiCommandsRemoveGroupMember({
+    required String groupId,
+    required String memberProfileId,
+  });
+
   Future<void> crateApiCommandsRequestFriendship({
     required String friendCode,
     String? greeting,
@@ -157,12 +216,31 @@ abstract class RustLibApi extends BaseApi {
     required bool accept,
   });
 
+  Future<void> crateApiCommandsRespondGroupJoin({
+    required String groupId,
+    required String requesterProfileId,
+    required bool accept,
+  });
+
   Future<void> crateApiLifecycleRestoreBackup({
     required String archivePath,
     required String recoveryPhrase,
   });
 
   Future<void> crateApiLifecycleSetAppFocused({required bool focused});
+
+  Future<void> crateApiCommandsSetGroupHeart({
+    required String groupId,
+    required String postAuthorProfileId,
+    required String postId,
+    required bool active,
+  });
+
+  Future<void> crateApiCommandsSetGroupPostLifetime({
+    required String groupId,
+    required String postId,
+    int? expiresAt,
+  });
 
   Future<void> crateApiCommandsSetHeart({
     required String postAuthorProfileId,
@@ -188,6 +266,16 @@ abstract class RustLibApi extends BaseApi {
 
   Future<void> crateApiLifecycleStartNode({String? dataDirOverride});
 
+  Future<void> crateApiCommandsSyncGroup({
+    required String groupId,
+    required List<String> viaProfileIds,
+  });
+
+  Future<void> crateApiCommandsTransferGroupOwnership({
+    required String groupId,
+    required String toProfileId,
+  });
+
   Future<void> crateApiCommandsUpdateProfile({
     required String displayName,
     required String bio,
@@ -208,6 +296,80 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   });
 
   @override
+  Future<void> crateApiCommandsCreateGroup({
+    required String name,
+    required GroupContentMode contentMode,
+    required GroupJoinMode joinMode,
+    required GroupDiscoverability discoverability,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(name, serializer);
+          sse_encode_group_content_mode(contentMode, serializer);
+          sse_encode_group_join_mode(joinMode, serializer);
+          sse_encode_group_discoverability(discoverability, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 1,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiCommandsCreateGroupConstMeta,
+        argValues: [name, contentMode, joinMode, discoverability],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiCommandsCreateGroupConstMeta =>
+      const TaskConstMeta(
+        debugName: "create_group",
+        argNames: ["name", "contentMode", "joinMode", "discoverability"],
+      );
+
+  @override
+  Future<void> crateApiCommandsDeleteGroupPost({
+    required String groupId,
+    required String postId,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(groupId, serializer);
+          sse_encode_String(postId, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 2,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiCommandsDeleteGroupPostConstMeta,
+        argValues: [groupId, postId],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiCommandsDeleteGroupPostConstMeta =>
+      const TaskConstMeta(
+        debugName: "delete_group_post",
+        argNames: ["groupId", "postId"],
+      );
+
+  @override
   Future<void> crateApiCommandsDeletePost({required String postId}) {
     return handler.executeNormal(
       NormalTask(
@@ -217,7 +379,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 1,
+            funcId: 3,
             port: port_,
           );
         },
@@ -234,6 +396,89 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateApiCommandsDeletePostConstMeta =>
       const TaskConstMeta(debugName: "delete_post", argNames: ["postId"]);
+
+  @override
+  Future<void> crateApiCommandsEditGroupMetadata({
+    required String groupId,
+    String? name,
+    GroupJoinMode? joinMode,
+    GroupDiscoverability? discoverability,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(groupId, serializer);
+          sse_encode_opt_String(name, serializer);
+          sse_encode_opt_box_autoadd_group_join_mode(joinMode, serializer);
+          sse_encode_opt_box_autoadd_group_discoverability(
+            discoverability,
+            serializer,
+          );
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 4,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiCommandsEditGroupMetadataConstMeta,
+        argValues: [groupId, name, joinMode, discoverability],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiCommandsEditGroupMetadataConstMeta =>
+      const TaskConstMeta(
+        debugName: "edit_group_metadata",
+        argNames: ["groupId", "name", "joinMode", "discoverability"],
+      );
+
+  @override
+  Future<void> crateApiCommandsEditGroupPost({
+    required String groupId,
+    required String postId,
+    required String body,
+    required List<MediaAttachment> keptMedia,
+    required List<MediaDraftInput> newMedia,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(groupId, serializer);
+          sse_encode_String(postId, serializer);
+          sse_encode_String(body, serializer);
+          sse_encode_list_media_attachment(keptMedia, serializer);
+          sse_encode_list_media_draft_input(newMedia, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 5,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiCommandsEditGroupPostConstMeta,
+        argValues: [groupId, postId, body, keptMedia, newMedia],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiCommandsEditGroupPostConstMeta =>
+      const TaskConstMeta(
+        debugName: "edit_group_post",
+        argNames: ["groupId", "postId", "body", "keptMedia", "newMedia"],
+      );
 
   @override
   Future<void> crateApiCommandsEditPost({
@@ -253,7 +498,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 2,
+            funcId: 6,
             port: port_,
           );
         },
@@ -285,7 +530,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 3,
+              funcId: 7,
               port: port_,
             );
           },
@@ -315,7 +560,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 4,
+            funcId: 8,
             port: port_,
           );
         },
@@ -342,7 +587,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 5,
+            funcId: 9,
             port: port_,
           );
         },
@@ -369,7 +614,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 6,
+            funcId: 10,
             port: port_,
           );
         },
@@ -396,7 +641,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 7,
+            funcId: 11,
             port: port_,
           );
         },
@@ -415,6 +660,42 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(debugName: "is_fresh_install", argNames: []);
 
   @override
+  Future<void> crateApiCommandsJoinGroup({
+    required String groupId,
+    String? greeting,
+    required List<String> viaProfileIds,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(groupId, serializer);
+          sse_encode_opt_String(greeting, serializer);
+          sse_encode_list_String(viaProfileIds, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 12,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiCommandsJoinGroupConstMeta,
+        argValues: [groupId, greeting, viaProfileIds],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiCommandsJoinGroupConstMeta => const TaskConstMeta(
+    debugName: "join_group",
+    argNames: ["groupId", "greeting", "viaProfileIds"],
+  );
+
+  @override
   Future<void> crateApiCommandsKeepPost({
     required String postAuthorProfileId,
     required String postId,
@@ -428,7 +709,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 8,
+            funcId: 13,
             port: port_,
           );
         },
@@ -449,6 +730,34 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   );
 
   @override
+  Future<void> crateApiCommandsLeaveGroup({required String groupId}) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(groupId, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 14,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiCommandsLeaveGroupConstMeta,
+        argValues: [groupId],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiCommandsLeaveGroupConstMeta =>
+      const TaskConstMeta(debugName: "leave_group", argNames: ["groupId"]);
+
+  @override
   Future<String?> crateApiMediaLocalMediaPath({required String blobHash}) {
     return handler.executeNormal(
       NormalTask(
@@ -458,7 +767,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 9,
+            funcId: 15,
             port: port_,
           );
         },
@@ -480,6 +789,37 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<void> crateApiCommandsMarkGroupOpened({required String groupId}) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(groupId, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 16,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiCommandsMarkGroupOpenedConstMeta,
+        argValues: [groupId],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiCommandsMarkGroupOpenedConstMeta =>
+      const TaskConstMeta(
+        debugName: "mark_group_opened",
+        argNames: ["groupId"],
+      );
+
+  @override
   Future<String> crateApiLifecycleMyFriendCode() {
     return handler.executeNormal(
       NormalTask(
@@ -488,7 +828,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 10,
+            funcId: 17,
             port: port_,
           );
         },
@@ -515,7 +855,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 11,
+            funcId: 18,
             port: port_,
           );
         },
@@ -549,7 +889,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 12,
+            funcId: 19,
             port: port_,
           );
         },
@@ -571,6 +911,84 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<void> crateApiCommandsPublishGroupComment({
+    required String groupId,
+    required String postAuthorProfileId,
+    required String postId,
+    required String body,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(groupId, serializer);
+          sse_encode_String(postAuthorProfileId, serializer);
+          sse_encode_String(postId, serializer);
+          sse_encode_String(body, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 20,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiCommandsPublishGroupCommentConstMeta,
+        argValues: [groupId, postAuthorProfileId, postId, body],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiCommandsPublishGroupCommentConstMeta =>
+      const TaskConstMeta(
+        debugName: "publish_group_comment",
+        argNames: ["groupId", "postAuthorProfileId", "postId", "body"],
+      );
+
+  @override
+  Future<void> crateApiCommandsPublishGroupPost({
+    required String groupId,
+    required String body,
+    int? lifetimeSecs,
+    required List<MediaDraftInput> media,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(groupId, serializer);
+          sse_encode_String(body, serializer);
+          sse_encode_opt_CastedPrimitive_u_64(lifetimeSecs, serializer);
+          sse_encode_list_media_draft_input(media, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 21,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiCommandsPublishGroupPostConstMeta,
+        argValues: [groupId, body, lifetimeSecs, media],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiCommandsPublishGroupPostConstMeta =>
+      const TaskConstMeta(
+        debugName: "publish_group_post",
+        argNames: ["groupId", "body", "lifetimeSecs", "media"],
+      );
+
+  @override
   Future<void> crateApiCommandsPublishPost({
     required String body,
     required Visibility visibility,
@@ -588,7 +1006,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 13,
+            funcId: 22,
             port: port_,
           );
         },
@@ -618,7 +1036,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 14,
+            funcId: 23,
             port: port_,
           );
         },
@@ -650,7 +1068,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 15,
+            funcId: 24,
             port: port_,
           );
         },
@@ -681,7 +1099,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 16,
+            funcId: 25,
             port: port_,
           );
         },
@@ -700,6 +1118,41 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(debugName: "remove_friend", argNames: ["profileId"]);
 
   @override
+  Future<void> crateApiCommandsRemoveGroupMember({
+    required String groupId,
+    required String memberProfileId,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(groupId, serializer);
+          sse_encode_String(memberProfileId, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 26,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiCommandsRemoveGroupMemberConstMeta,
+        argValues: [groupId, memberProfileId],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiCommandsRemoveGroupMemberConstMeta =>
+      const TaskConstMeta(
+        debugName: "remove_group_member",
+        argNames: ["groupId", "memberProfileId"],
+      );
+
+  @override
   Future<void> crateApiCommandsRequestFriendship({
     required String friendCode,
     String? greeting,
@@ -713,7 +1166,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 17,
+            funcId: 27,
             port: port_,
           );
         },
@@ -748,7 +1201,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 18,
+            funcId: 28,
             port: port_,
           );
         },
@@ -779,7 +1232,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 19,
+            funcId: 29,
             port: port_,
           );
         },
@@ -811,7 +1264,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 20,
+            funcId: 30,
             port: port_,
           );
         },
@@ -833,6 +1286,43 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<void> crateApiCommandsRespondGroupJoin({
+    required String groupId,
+    required String requesterProfileId,
+    required bool accept,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(groupId, serializer);
+          sse_encode_String(requesterProfileId, serializer);
+          sse_encode_bool(accept, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 31,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiCommandsRespondGroupJoinConstMeta,
+        argValues: [groupId, requesterProfileId, accept],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiCommandsRespondGroupJoinConstMeta =>
+      const TaskConstMeta(
+        debugName: "respond_group_join",
+        argNames: ["groupId", "requesterProfileId", "accept"],
+      );
+
+  @override
   Future<void> crateApiLifecycleRestoreBackup({
     required String archivePath,
     required String recoveryPhrase,
@@ -846,7 +1336,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 21,
+            funcId: 32,
             port: port_,
           );
         },
@@ -877,7 +1367,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 22,
+            funcId: 33,
             port: port_,
           );
         },
@@ -896,6 +1386,82 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(debugName: "set_app_focused", argNames: ["focused"]);
 
   @override
+  Future<void> crateApiCommandsSetGroupHeart({
+    required String groupId,
+    required String postAuthorProfileId,
+    required String postId,
+    required bool active,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(groupId, serializer);
+          sse_encode_String(postAuthorProfileId, serializer);
+          sse_encode_String(postId, serializer);
+          sse_encode_bool(active, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 34,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiCommandsSetGroupHeartConstMeta,
+        argValues: [groupId, postAuthorProfileId, postId, active],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiCommandsSetGroupHeartConstMeta =>
+      const TaskConstMeta(
+        debugName: "set_group_heart",
+        argNames: ["groupId", "postAuthorProfileId", "postId", "active"],
+      );
+
+  @override
+  Future<void> crateApiCommandsSetGroupPostLifetime({
+    required String groupId,
+    required String postId,
+    int? expiresAt,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(groupId, serializer);
+          sse_encode_String(postId, serializer);
+          sse_encode_opt_CastedPrimitive_u_64(expiresAt, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 35,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiCommandsSetGroupPostLifetimeConstMeta,
+        argValues: [groupId, postId, expiresAt],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiCommandsSetGroupPostLifetimeConstMeta =>
+      const TaskConstMeta(
+        debugName: "set_group_post_lifetime",
+        argNames: ["groupId", "postId", "expiresAt"],
+      );
+
+  @override
   Future<void> crateApiCommandsSetHeart({
     required String postAuthorProfileId,
     required String postId,
@@ -911,7 +1477,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 23,
+            funcId: 36,
             port: port_,
           );
         },
@@ -941,7 +1507,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 24,
+            funcId: 37,
             port: port_,
           );
         },
@@ -971,7 +1537,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 25,
+            funcId: 38,
             port: port_,
           );
         },
@@ -1006,7 +1572,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 26,
+            funcId: 39,
             port: port_,
           );
         },
@@ -1041,7 +1607,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 27,
+            funcId: 40,
             port: port_,
           );
         },
@@ -1072,7 +1638,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 28,
+            funcId: 41,
             port: port_,
           );
         },
@@ -1091,6 +1657,75 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     debugName: "start_node",
     argNames: ["dataDirOverride"],
   );
+
+  @override
+  Future<void> crateApiCommandsSyncGroup({
+    required String groupId,
+    required List<String> viaProfileIds,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(groupId, serializer);
+          sse_encode_list_String(viaProfileIds, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 42,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiCommandsSyncGroupConstMeta,
+        argValues: [groupId, viaProfileIds],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiCommandsSyncGroupConstMeta => const TaskConstMeta(
+    debugName: "sync_group",
+    argNames: ["groupId", "viaProfileIds"],
+  );
+
+  @override
+  Future<void> crateApiCommandsTransferGroupOwnership({
+    required String groupId,
+    required String toProfileId,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(groupId, serializer);
+          sse_encode_String(toProfileId, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 43,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiCommandsTransferGroupOwnershipConstMeta,
+        argValues: [groupId, toProfileId],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiCommandsTransferGroupOwnershipConstMeta =>
+      const TaskConstMeta(
+        debugName: "transfer_group_ownership",
+        argNames: ["groupId", "toProfileId"],
+      );
 
   @override
   Future<void> crateApiCommandsUpdateProfile({
@@ -1112,7 +1747,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 29,
+            funcId: 44,
             port: port_,
           );
         },
@@ -1155,7 +1790,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 30,
+            funcId: 45,
             port: port_,
           );
         },
@@ -1220,6 +1855,26 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   DiagnosticsSnapshot dco_decode_box_autoadd_diagnostics_snapshot(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_diagnostics_snapshot(raw);
+  }
+
+  @protected
+  GroupDiscoverability dco_decode_box_autoadd_group_discoverability(
+    dynamic raw,
+  ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_group_discoverability(raw);
+  }
+
+  @protected
+  GroupJoinMode dco_decode_box_autoadd_group_join_mode(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_group_join_mode(raw);
+  }
+
+  @protected
+  GroupView dco_decode_box_autoadd_group_view(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_group_view(raw);
   }
 
   @protected
@@ -1315,6 +1970,159 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  GroupComment dco_decode_group_comment(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 6)
+      throw Exception('unexpected arr length: expect 6 but see ${arr.length}');
+    return GroupComment(
+      commentId: dco_decode_String(arr[0]),
+      commenterProfileId: dco_decode_String(arr[1]),
+      postAuthorProfileId: dco_decode_String(arr[2]),
+      postId: dco_decode_String(arr[3]),
+      body: dco_decode_String(arr[4]),
+      createdAt: dco_decode_CastedPrimitive_u_64(arr[5]),
+    );
+  }
+
+  @protected
+  GroupContentMode dco_decode_group_content_mode(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return GroupContentMode.values[raw as int];
+  }
+
+  @protected
+  GroupDigestDoor dco_decode_group_digest_door(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 3)
+      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    return GroupDigestDoor(
+      groupId: dco_decode_String(arr[0]),
+      name: dco_decode_String(arr[1]),
+      latestActivityAt: dco_decode_CastedPrimitive_u_64(arr[2]),
+    );
+  }
+
+  @protected
+  GroupDiscoverability dco_decode_group_discoverability(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return GroupDiscoverability.values[raw as int];
+  }
+
+  @protected
+  GroupDiscoveryCard dco_decode_group_discovery_card(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 4)
+      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    return GroupDiscoveryCard(
+      carrierProfileId: dco_decode_String(arr[0]),
+      carrierDisplayName: dco_decode_String(arr[1]),
+      groupId: dco_decode_String(arr[2]),
+      groupName: dco_decode_String(arr[3]),
+    );
+  }
+
+  @protected
+  GroupHeart dco_decode_group_heart(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 4)
+      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    return GroupHeart(
+      hearterProfileId: dco_decode_String(arr[0]),
+      postAuthorProfileId: dco_decode_String(arr[1]),
+      postId: dco_decode_String(arr[2]),
+      recordedAt: dco_decode_CastedPrimitive_u_64(arr[3]),
+    );
+  }
+
+  @protected
+  GroupJoinMode dco_decode_group_join_mode(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return GroupJoinMode.values[raw as int];
+  }
+
+  @protected
+  GroupJoinRequest dco_decode_group_join_request(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 4)
+      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    return GroupJoinRequest(
+      requesterProfileId: dco_decode_String(arr[0]),
+      requesterDisplayName: dco_decode_String(arr[1]),
+      greeting: dco_decode_opt_String(arr[2]),
+      recordedAt: dco_decode_CastedPrimitive_u_64(arr[3]),
+    );
+  }
+
+  @protected
+  GroupMemberEntry dco_decode_group_member_entry(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 3)
+      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    return GroupMemberEntry(
+      profileId: dco_decode_String(arr[0]),
+      roles: dco_decode_list_group_role(arr[1]),
+      since: dco_decode_CastedPrimitive_u_64(arr[2]),
+    );
+  }
+
+  @protected
+  GroupRole dco_decode_group_role(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return GroupRole.values[raw as int];
+  }
+
+  @protected
+  GroupSuggestion dco_decode_group_suggestion(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 3)
+      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    return GroupSuggestion(
+      groupId: dco_decode_String(arr[0]),
+      groupName: dco_decode_String(arr[1]),
+      viaFriendProfileIds: dco_decode_list_String(arr[2]),
+    );
+  }
+
+  @protected
+  GroupView dco_decode_group_view(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 16)
+      throw Exception('unexpected arr length: expect 16 but see ${arr.length}');
+    return GroupView(
+      groupId: dco_decode_String(arr[0]),
+      name: dco_decode_String(arr[1]),
+      contentMode: dco_decode_group_content_mode(arr[2]),
+      joinMode: dco_decode_group_join_mode(arr[3]),
+      discoverability: dco_decode_group_discoverability(arr[4]),
+      createdAt: dco_decode_CastedPrimitive_u_64(arr[5]),
+      ownerProfileId: dco_decode_String(arr[6]),
+      viewerStatus: dco_decode_group_viewer_status(arr[7]),
+      memberCount: dco_decode_opt_box_autoadd_u_32(arr[8]),
+      members: dco_decode_list_group_member_entry(arr[9]),
+      pendingRequests: dco_decode_list_group_join_request(arr[10]),
+      posts: dco_decode_list_reduced_post(arr[11]),
+      comments: dco_decode_list_group_comment(arr[12]),
+      hearts: dco_decode_list_group_heart(arr[13]),
+      latestActivityAt: dco_decode_CastedPrimitive_u_64(arr[14]),
+      hasNewActivity: dco_decode_bool(arr[15]),
+    );
+  }
+
+  @protected
+  GroupViewerStatus dco_decode_group_viewer_status(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return GroupViewerStatus.values[raw as int];
+  }
+
+  @protected
   int dco_decode_i_32(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as int;
@@ -1328,31 +2136,39 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         return JynEvent_River(
           posts: dco_decode_list_river_post(raw[1]),
           ghosts: dco_decode_list_ghost_card(raw[2]),
+          doors: dco_decode_list_group_digest_door(raw[3]),
+          groupCards: dco_decode_list_group_discovery_card(raw[4]),
         );
       case 1:
+        return JynEvent_Group(view: dco_decode_box_autoadd_group_view(raw[1]));
+      case 2:
+        return JynEvent_GroupSuggestions(
+          suggestions: dco_decode_list_group_suggestion(raw[1]),
+        );
+      case 3:
         return JynEvent_Profile(
           profile: dco_decode_box_autoadd_user_profile(raw[1]),
         );
-      case 2:
+      case 4:
         return JynEvent_Friends(
           friends: dco_decode_list_friend_entry(raw[1]),
           pending: dco_decode_list_pending_friend_request(raw[2]),
         );
-      case 3:
+      case 5:
         return JynEvent_Diagnostics(
           snapshot: dco_decode_box_autoadd_diagnostics_snapshot(raw[1]),
         );
-      case 4:
+      case 6:
         return JynEvent_MediaReady(
           blobHash: dco_decode_String(raw[1]),
           path: dco_decode_String(raw[2]),
         );
-      case 5:
+      case 7:
         return JynEvent_MediaFailed(
           blobHash: dco_decode_String(raw[1]),
           errorMessage: dco_decode_String(raw[2]),
         );
-      case 6:
+      case 8:
         return JynEvent_Error(
           context: dco_decode_String(raw[1]),
           message: dco_decode_String(raw[2]),
@@ -1409,6 +2225,54 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<GroupComment> dco_decode_list_group_comment(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_group_comment).toList();
+  }
+
+  @protected
+  List<GroupDigestDoor> dco_decode_list_group_digest_door(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_group_digest_door).toList();
+  }
+
+  @protected
+  List<GroupDiscoveryCard> dco_decode_list_group_discovery_card(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_group_discovery_card).toList();
+  }
+
+  @protected
+  List<GroupHeart> dco_decode_list_group_heart(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_group_heart).toList();
+  }
+
+  @protected
+  List<GroupJoinRequest> dco_decode_list_group_join_request(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_group_join_request).toList();
+  }
+
+  @protected
+  List<GroupMemberEntry> dco_decode_list_group_member_entry(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_group_member_entry).toList();
+  }
+
+  @protected
+  List<GroupRole> dco_decode_list_group_role(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_group_role).toList();
+  }
+
+  @protected
+  List<GroupSuggestion> dco_decode_list_group_suggestion(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_group_suggestion).toList();
+  }
+
+  @protected
   List<MediaAttachment> dco_decode_list_media_attachment(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return (raw as List<dynamic>).map(dco_decode_media_attachment).toList();
@@ -1440,6 +2304,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as Uint8List;
+  }
+
+  @protected
+  List<ReducedPost> dco_decode_list_reduced_post(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_reduced_post).toList();
   }
 
   @protected
@@ -1528,6 +2398,22 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   String? dco_decode_opt_String(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_String(raw);
+  }
+
+  @protected
+  GroupDiscoverability? dco_decode_opt_box_autoadd_group_discoverability(
+    dynamic raw,
+  ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw == null
+        ? null
+        : dco_decode_box_autoadd_group_discoverability(raw);
+  }
+
+  @protected
+  GroupJoinMode? dco_decode_opt_box_autoadd_group_join_mode(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw == null ? null : dco_decode_box_autoadd_group_join_mode(raw);
   }
 
   @protected
@@ -1784,6 +2670,28 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  GroupDiscoverability sse_decode_box_autoadd_group_discoverability(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_group_discoverability(deserializer));
+  }
+
+  @protected
+  GroupJoinMode sse_decode_box_autoadd_group_join_mode(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_group_join_mode(deserializer));
+  }
+
+  @protected
+  GroupView sse_decode_box_autoadd_group_view(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_group_view(deserializer));
+  }
+
+  @protected
   int sse_decode_box_autoadd_u_32(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_u_32(deserializer));
@@ -1884,6 +2792,189 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  GroupComment sse_decode_group_comment(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_commentId = sse_decode_String(deserializer);
+    var var_commenterProfileId = sse_decode_String(deserializer);
+    var var_postAuthorProfileId = sse_decode_String(deserializer);
+    var var_postId = sse_decode_String(deserializer);
+    var var_body = sse_decode_String(deserializer);
+    var var_createdAt = sse_decode_CastedPrimitive_u_64(deserializer);
+    return GroupComment(
+      commentId: var_commentId,
+      commenterProfileId: var_commenterProfileId,
+      postAuthorProfileId: var_postAuthorProfileId,
+      postId: var_postId,
+      body: var_body,
+      createdAt: var_createdAt,
+    );
+  }
+
+  @protected
+  GroupContentMode sse_decode_group_content_mode(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var inner = sse_decode_i_32(deserializer);
+    return GroupContentMode.values[inner];
+  }
+
+  @protected
+  GroupDigestDoor sse_decode_group_digest_door(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_groupId = sse_decode_String(deserializer);
+    var var_name = sse_decode_String(deserializer);
+    var var_latestActivityAt = sse_decode_CastedPrimitive_u_64(deserializer);
+    return GroupDigestDoor(
+      groupId: var_groupId,
+      name: var_name,
+      latestActivityAt: var_latestActivityAt,
+    );
+  }
+
+  @protected
+  GroupDiscoverability sse_decode_group_discoverability(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var inner = sse_decode_i_32(deserializer);
+    return GroupDiscoverability.values[inner];
+  }
+
+  @protected
+  GroupDiscoveryCard sse_decode_group_discovery_card(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_carrierProfileId = sse_decode_String(deserializer);
+    var var_carrierDisplayName = sse_decode_String(deserializer);
+    var var_groupId = sse_decode_String(deserializer);
+    var var_groupName = sse_decode_String(deserializer);
+    return GroupDiscoveryCard(
+      carrierProfileId: var_carrierProfileId,
+      carrierDisplayName: var_carrierDisplayName,
+      groupId: var_groupId,
+      groupName: var_groupName,
+    );
+  }
+
+  @protected
+  GroupHeart sse_decode_group_heart(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_hearterProfileId = sse_decode_String(deserializer);
+    var var_postAuthorProfileId = sse_decode_String(deserializer);
+    var var_postId = sse_decode_String(deserializer);
+    var var_recordedAt = sse_decode_CastedPrimitive_u_64(deserializer);
+    return GroupHeart(
+      hearterProfileId: var_hearterProfileId,
+      postAuthorProfileId: var_postAuthorProfileId,
+      postId: var_postId,
+      recordedAt: var_recordedAt,
+    );
+  }
+
+  @protected
+  GroupJoinMode sse_decode_group_join_mode(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var inner = sse_decode_i_32(deserializer);
+    return GroupJoinMode.values[inner];
+  }
+
+  @protected
+  GroupJoinRequest sse_decode_group_join_request(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_requesterProfileId = sse_decode_String(deserializer);
+    var var_requesterDisplayName = sse_decode_String(deserializer);
+    var var_greeting = sse_decode_opt_String(deserializer);
+    var var_recordedAt = sse_decode_CastedPrimitive_u_64(deserializer);
+    return GroupJoinRequest(
+      requesterProfileId: var_requesterProfileId,
+      requesterDisplayName: var_requesterDisplayName,
+      greeting: var_greeting,
+      recordedAt: var_recordedAt,
+    );
+  }
+
+  @protected
+  GroupMemberEntry sse_decode_group_member_entry(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_profileId = sse_decode_String(deserializer);
+    var var_roles = sse_decode_list_group_role(deserializer);
+    var var_since = sse_decode_CastedPrimitive_u_64(deserializer);
+    return GroupMemberEntry(
+      profileId: var_profileId,
+      roles: var_roles,
+      since: var_since,
+    );
+  }
+
+  @protected
+  GroupRole sse_decode_group_role(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var inner = sse_decode_i_32(deserializer);
+    return GroupRole.values[inner];
+  }
+
+  @protected
+  GroupSuggestion sse_decode_group_suggestion(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_groupId = sse_decode_String(deserializer);
+    var var_groupName = sse_decode_String(deserializer);
+    var var_viaFriendProfileIds = sse_decode_list_String(deserializer);
+    return GroupSuggestion(
+      groupId: var_groupId,
+      groupName: var_groupName,
+      viaFriendProfileIds: var_viaFriendProfileIds,
+    );
+  }
+
+  @protected
+  GroupView sse_decode_group_view(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_groupId = sse_decode_String(deserializer);
+    var var_name = sse_decode_String(deserializer);
+    var var_contentMode = sse_decode_group_content_mode(deserializer);
+    var var_joinMode = sse_decode_group_join_mode(deserializer);
+    var var_discoverability = sse_decode_group_discoverability(deserializer);
+    var var_createdAt = sse_decode_CastedPrimitive_u_64(deserializer);
+    var var_ownerProfileId = sse_decode_String(deserializer);
+    var var_viewerStatus = sse_decode_group_viewer_status(deserializer);
+    var var_memberCount = sse_decode_opt_box_autoadd_u_32(deserializer);
+    var var_members = sse_decode_list_group_member_entry(deserializer);
+    var var_pendingRequests = sse_decode_list_group_join_request(deserializer);
+    var var_posts = sse_decode_list_reduced_post(deserializer);
+    var var_comments = sse_decode_list_group_comment(deserializer);
+    var var_hearts = sse_decode_list_group_heart(deserializer);
+    var var_latestActivityAt = sse_decode_CastedPrimitive_u_64(deserializer);
+    var var_hasNewActivity = sse_decode_bool(deserializer);
+    return GroupView(
+      groupId: var_groupId,
+      name: var_name,
+      contentMode: var_contentMode,
+      joinMode: var_joinMode,
+      discoverability: var_discoverability,
+      createdAt: var_createdAt,
+      ownerProfileId: var_ownerProfileId,
+      viewerStatus: var_viewerStatus,
+      memberCount: var_memberCount,
+      members: var_members,
+      pendingRequests: var_pendingRequests,
+      posts: var_posts,
+      comments: var_comments,
+      hearts: var_hearts,
+      latestActivityAt: var_latestActivityAt,
+      hasNewActivity: var_hasNewActivity,
+    );
+  }
+
+  @protected
+  GroupViewerStatus sse_decode_group_viewer_status(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var inner = sse_decode_i_32(deserializer);
+    return GroupViewerStatus.values[inner];
+  }
+
+  @protected
   int sse_decode_i_32(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return deserializer.buffer.getInt32();
@@ -1898,31 +2989,44 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       case 0:
         var var_posts = sse_decode_list_river_post(deserializer);
         var var_ghosts = sse_decode_list_ghost_card(deserializer);
-        return JynEvent_River(posts: var_posts, ghosts: var_ghosts);
+        var var_doors = sse_decode_list_group_digest_door(deserializer);
+        var var_groupCards = sse_decode_list_group_discovery_card(deserializer);
+        return JynEvent_River(
+          posts: var_posts,
+          ghosts: var_ghosts,
+          doors: var_doors,
+          groupCards: var_groupCards,
+        );
       case 1:
+        var var_view = sse_decode_box_autoadd_group_view(deserializer);
+        return JynEvent_Group(view: var_view);
+      case 2:
+        var var_suggestions = sse_decode_list_group_suggestion(deserializer);
+        return JynEvent_GroupSuggestions(suggestions: var_suggestions);
+      case 3:
         var var_profile = sse_decode_box_autoadd_user_profile(deserializer);
         return JynEvent_Profile(profile: var_profile);
-      case 2:
+      case 4:
         var var_friends = sse_decode_list_friend_entry(deserializer);
         var var_pending = sse_decode_list_pending_friend_request(deserializer);
         return JynEvent_Friends(friends: var_friends, pending: var_pending);
-      case 3:
+      case 5:
         var var_snapshot = sse_decode_box_autoadd_diagnostics_snapshot(
           deserializer,
         );
         return JynEvent_Diagnostics(snapshot: var_snapshot);
-      case 4:
+      case 6:
         var var_blobHash = sse_decode_String(deserializer);
         var var_path = sse_decode_String(deserializer);
         return JynEvent_MediaReady(blobHash: var_blobHash, path: var_path);
-      case 5:
+      case 7:
         var var_blobHash = sse_decode_String(deserializer);
         var var_errorMessage = sse_decode_String(deserializer);
         return JynEvent_MediaFailed(
           blobHash: var_blobHash,
           errorMessage: var_errorMessage,
         );
-      case 6:
+      case 8:
         var var_context = sse_decode_String(deserializer);
         var var_message = sse_decode_String(deserializer);
         return JynEvent_Error(context: var_context, message: var_message);
@@ -2010,6 +3114,114 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<GroupComment> sse_decode_list_group_comment(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <GroupComment>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_group_comment(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
+  List<GroupDigestDoor> sse_decode_list_group_digest_door(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <GroupDigestDoor>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_group_digest_door(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
+  List<GroupDiscoveryCard> sse_decode_list_group_discovery_card(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <GroupDiscoveryCard>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_group_discovery_card(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
+  List<GroupHeart> sse_decode_list_group_heart(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <GroupHeart>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_group_heart(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
+  List<GroupJoinRequest> sse_decode_list_group_join_request(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <GroupJoinRequest>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_group_join_request(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
+  List<GroupMemberEntry> sse_decode_list_group_member_entry(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <GroupMemberEntry>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_group_member_entry(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
+  List<GroupRole> sse_decode_list_group_role(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <GroupRole>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_group_role(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
+  List<GroupSuggestion> sse_decode_list_group_suggestion(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <GroupSuggestion>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_group_suggestion(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
   List<MediaAttachment> sse_decode_list_media_attachment(
     SseDeserializer deserializer,
   ) {
@@ -2070,6 +3282,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var len_ = sse_decode_i_32(deserializer);
     return deserializer.buffer.getUint8List(len_);
+  }
+
+  @protected
+  List<ReducedPost> sse_decode_list_reduced_post(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <ReducedPost>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_reduced_post(deserializer));
+    }
+    return ans_;
   }
 
   @protected
@@ -2196,6 +3420,32 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
     if (sse_decode_bool(deserializer)) {
       return (sse_decode_String(deserializer));
+    } else {
+      return null;
+    }
+  }
+
+  @protected
+  GroupDiscoverability? sse_decode_opt_box_autoadd_group_discoverability(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    if (sse_decode_bool(deserializer)) {
+      return (sse_decode_box_autoadd_group_discoverability(deserializer));
+    } else {
+      return null;
+    }
+  }
+
+  @protected
+  GroupJoinMode? sse_decode_opt_box_autoadd_group_join_mode(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    if (sse_decode_bool(deserializer)) {
+      return (sse_decode_box_autoadd_group_join_mode(deserializer));
     } else {
       return null;
     }
@@ -2502,6 +3752,33 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_box_autoadd_group_discoverability(
+    GroupDiscoverability self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_group_discoverability(self, serializer);
+  }
+
+  @protected
+  void sse_encode_box_autoadd_group_join_mode(
+    GroupJoinMode self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_group_join_mode(self, serializer);
+  }
+
+  @protected
+  void sse_encode_box_autoadd_group_view(
+    GroupView self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_group_view(self, serializer);
+  }
+
+  @protected
   void sse_encode_box_autoadd_u_32(int self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_u_32(self, serializer);
@@ -2582,6 +3859,146 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_group_comment(GroupComment self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.commentId, serializer);
+    sse_encode_String(self.commenterProfileId, serializer);
+    sse_encode_String(self.postAuthorProfileId, serializer);
+    sse_encode_String(self.postId, serializer);
+    sse_encode_String(self.body, serializer);
+    sse_encode_CastedPrimitive_u_64(self.createdAt, serializer);
+  }
+
+  @protected
+  void sse_encode_group_content_mode(
+    GroupContentMode self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.index, serializer);
+  }
+
+  @protected
+  void sse_encode_group_digest_door(
+    GroupDigestDoor self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.groupId, serializer);
+    sse_encode_String(self.name, serializer);
+    sse_encode_CastedPrimitive_u_64(self.latestActivityAt, serializer);
+  }
+
+  @protected
+  void sse_encode_group_discoverability(
+    GroupDiscoverability self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.index, serializer);
+  }
+
+  @protected
+  void sse_encode_group_discovery_card(
+    GroupDiscoveryCard self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.carrierProfileId, serializer);
+    sse_encode_String(self.carrierDisplayName, serializer);
+    sse_encode_String(self.groupId, serializer);
+    sse_encode_String(self.groupName, serializer);
+  }
+
+  @protected
+  void sse_encode_group_heart(GroupHeart self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.hearterProfileId, serializer);
+    sse_encode_String(self.postAuthorProfileId, serializer);
+    sse_encode_String(self.postId, serializer);
+    sse_encode_CastedPrimitive_u_64(self.recordedAt, serializer);
+  }
+
+  @protected
+  void sse_encode_group_join_mode(
+    GroupJoinMode self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.index, serializer);
+  }
+
+  @protected
+  void sse_encode_group_join_request(
+    GroupJoinRequest self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.requesterProfileId, serializer);
+    sse_encode_String(self.requesterDisplayName, serializer);
+    sse_encode_opt_String(self.greeting, serializer);
+    sse_encode_CastedPrimitive_u_64(self.recordedAt, serializer);
+  }
+
+  @protected
+  void sse_encode_group_member_entry(
+    GroupMemberEntry self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.profileId, serializer);
+    sse_encode_list_group_role(self.roles, serializer);
+    sse_encode_CastedPrimitive_u_64(self.since, serializer);
+  }
+
+  @protected
+  void sse_encode_group_role(GroupRole self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.index, serializer);
+  }
+
+  @protected
+  void sse_encode_group_suggestion(
+    GroupSuggestion self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.groupId, serializer);
+    sse_encode_String(self.groupName, serializer);
+    sse_encode_list_String(self.viaFriendProfileIds, serializer);
+  }
+
+  @protected
+  void sse_encode_group_view(GroupView self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.groupId, serializer);
+    sse_encode_String(self.name, serializer);
+    sse_encode_group_content_mode(self.contentMode, serializer);
+    sse_encode_group_join_mode(self.joinMode, serializer);
+    sse_encode_group_discoverability(self.discoverability, serializer);
+    sse_encode_CastedPrimitive_u_64(self.createdAt, serializer);
+    sse_encode_String(self.ownerProfileId, serializer);
+    sse_encode_group_viewer_status(self.viewerStatus, serializer);
+    sse_encode_opt_box_autoadd_u_32(self.memberCount, serializer);
+    sse_encode_list_group_member_entry(self.members, serializer);
+    sse_encode_list_group_join_request(self.pendingRequests, serializer);
+    sse_encode_list_reduced_post(self.posts, serializer);
+    sse_encode_list_group_comment(self.comments, serializer);
+    sse_encode_list_group_heart(self.hearts, serializer);
+    sse_encode_CastedPrimitive_u_64(self.latestActivityAt, serializer);
+    sse_encode_bool(self.hasNewActivity, serializer);
+  }
+
+  @protected
+  void sse_encode_group_viewer_status(
+    GroupViewerStatus self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.index, serializer);
+  }
+
+  @protected
   void sse_encode_i_32(int self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     serializer.buffer.putInt32(self);
@@ -2591,33 +4008,46 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   void sse_encode_jyn_event(JynEvent self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     switch (self) {
-      case JynEvent_River(posts: final posts, ghosts: final ghosts):
+      case JynEvent_River(
+        posts: final posts,
+        ghosts: final ghosts,
+        doors: final doors,
+        groupCards: final groupCards,
+      ):
         sse_encode_i_32(0, serializer);
         sse_encode_list_river_post(posts, serializer);
         sse_encode_list_ghost_card(ghosts, serializer);
-      case JynEvent_Profile(profile: final profile):
+        sse_encode_list_group_digest_door(doors, serializer);
+        sse_encode_list_group_discovery_card(groupCards, serializer);
+      case JynEvent_Group(view: final view):
         sse_encode_i_32(1, serializer);
+        sse_encode_box_autoadd_group_view(view, serializer);
+      case JynEvent_GroupSuggestions(suggestions: final suggestions):
+        sse_encode_i_32(2, serializer);
+        sse_encode_list_group_suggestion(suggestions, serializer);
+      case JynEvent_Profile(profile: final profile):
+        sse_encode_i_32(3, serializer);
         sse_encode_box_autoadd_user_profile(profile, serializer);
       case JynEvent_Friends(friends: final friends, pending: final pending):
-        sse_encode_i_32(2, serializer);
+        sse_encode_i_32(4, serializer);
         sse_encode_list_friend_entry(friends, serializer);
         sse_encode_list_pending_friend_request(pending, serializer);
       case JynEvent_Diagnostics(snapshot: final snapshot):
-        sse_encode_i_32(3, serializer);
+        sse_encode_i_32(5, serializer);
         sse_encode_box_autoadd_diagnostics_snapshot(snapshot, serializer);
       case JynEvent_MediaReady(blobHash: final blobHash, path: final path):
-        sse_encode_i_32(4, serializer);
+        sse_encode_i_32(6, serializer);
         sse_encode_String(blobHash, serializer);
         sse_encode_String(path, serializer);
       case JynEvent_MediaFailed(
         blobHash: final blobHash,
         errorMessage: final errorMessage,
       ):
-        sse_encode_i_32(5, serializer);
+        sse_encode_i_32(7, serializer);
         sse_encode_String(blobHash, serializer);
         sse_encode_String(errorMessage, serializer);
       case JynEvent_Error(context: final context, message: final message):
-        sse_encode_i_32(6, serializer);
+        sse_encode_i_32(8, serializer);
         sse_encode_String(context, serializer);
         sse_encode_String(message, serializer);
     }
@@ -2693,6 +4123,102 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_list_group_comment(
+    List<GroupComment> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_group_comment(item, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_list_group_digest_door(
+    List<GroupDigestDoor> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_group_digest_door(item, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_list_group_discovery_card(
+    List<GroupDiscoveryCard> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_group_discovery_card(item, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_list_group_heart(
+    List<GroupHeart> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_group_heart(item, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_list_group_join_request(
+    List<GroupJoinRequest> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_group_join_request(item, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_list_group_member_entry(
+    List<GroupMemberEntry> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_group_member_entry(item, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_list_group_role(
+    List<GroupRole> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_group_role(item, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_list_group_suggestion(
+    List<GroupSuggestion> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_group_suggestion(item, serializer);
+    }
+  }
+
+  @protected
   void sse_encode_list_media_attachment(
     List<MediaAttachment> self,
     SseSerializer serializer,
@@ -2748,6 +4274,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.length, serializer);
     serializer.buffer.putUint8List(self);
+  }
+
+  @protected
+  void sse_encode_list_reduced_post(
+    List<ReducedPost> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_reduced_post(item, serializer);
+    }
   }
 
   @protected
@@ -2861,6 +4399,32 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_bool(self != null, serializer);
     if (self != null) {
       sse_encode_String(self, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_opt_box_autoadd_group_discoverability(
+    GroupDiscoverability? self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    sse_encode_bool(self != null, serializer);
+    if (self != null) {
+      sse_encode_box_autoadd_group_discoverability(self, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_opt_box_autoadd_group_join_mode(
+    GroupJoinMode? self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    sse_encode_bool(self != null, serializer);
+    if (self != null) {
+      sse_encode_box_autoadd_group_join_mode(self, serializer);
     }
   }
 

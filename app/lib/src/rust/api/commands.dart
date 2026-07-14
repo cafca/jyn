@@ -5,6 +5,7 @@
 
 import '../domain.dart';
 import '../frb_generated.dart';
+import '../groups.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // These functions are ignored because they are not marked as `pub`: `into_draft`, `run`
@@ -138,6 +139,165 @@ Future<void> releaseKeep({
 /// phrase can decrypt it.
 Future<void> exportBackup({required String destPath}) =>
     RustLib.instance.api.crateApiCommandsExportBackup(destPath: destPath);
+
+/// Creates a Group; the caller becomes its Owner. Content mode is fixed
+/// forever at creation.
+Future<void> createGroup({
+  required String name,
+  required GroupContentMode contentMode,
+  required GroupJoinMode joinMode,
+  required GroupDiscoverability discoverability,
+}) => RustLib.instance.api.crateApiCommandsCreateGroup(
+  name: name,
+  contentMode: contentMode,
+  joinMode: joinMode,
+  discoverability: discoverability,
+);
+
+/// Joins a group's topic without membership — the visit-only read path for
+/// public groups. `via_profile_ids` seed reach (the friend whose suggestion
+/// or heart pointed here, or the Owner).
+Future<void> syncGroup({
+  required String groupId,
+  required List<String> viaProfileIds,
+}) => RustLib.instance.api.crateApiCommandsSyncGroup(
+  groupId: groupId,
+  viaProfileIds: viaProfileIds,
+);
+
+/// Asks to join a group. Open groups admit automatically once the Owner's
+/// node processes it; request-to-join groups stay pending until answered.
+Future<void> joinGroup({
+  required String groupId,
+  String? greeting,
+  required List<String> viaProfileIds,
+}) => RustLib.instance.api.crateApiCommandsJoinGroup(
+  groupId: groupId,
+  greeting: greeting,
+  viaProfileIds: viaProfileIds,
+);
+
+/// Owner answers a pending join request. Declining is local-only — a
+/// declined request is never a public record.
+Future<void> respondGroupJoin({
+  required String groupId,
+  required String requesterProfileId,
+  required bool accept,
+}) => RustLib.instance.api.crateApiCommandsRespondGroupJoin(
+  groupId: groupId,
+  requesterProfileId: requesterProfileId,
+  accept: accept,
+);
+
+/// Casts a post into a Group. No visibility choice — the Group's Content
+/// mode is the fixed visibility; lifetime stays per-post.
+Future<void> publishGroupPost({
+  required String groupId,
+  required String body,
+  int? lifetimeSecs,
+  required List<MediaDraftInput> media,
+}) => RustLib.instance.api.crateApiCommandsPublishGroupPost(
+  groupId: groupId,
+  body: body,
+  lifetimeSecs: lifetimeSecs,
+  media: media,
+);
+
+Future<void> editGroupPost({
+  required String groupId,
+  required String postId,
+  required String body,
+  required List<MediaAttachment> keptMedia,
+  required List<MediaDraftInput> newMedia,
+}) => RustLib.instance.api.crateApiCommandsEditGroupPost(
+  groupId: groupId,
+  postId: postId,
+  body: body,
+  keptMedia: keptMedia,
+  newMedia: newMedia,
+);
+
+Future<void> deleteGroupPost({
+  required String groupId,
+  required String postId,
+}) => RustLib.instance.api.crateApiCommandsDeleteGroupPost(
+  groupId: groupId,
+  postId: postId,
+);
+
+Future<void> setGroupPostLifetime({
+  required String groupId,
+  required String postId,
+  int? expiresAt,
+}) => RustLib.instance.api.crateApiCommandsSetGroupPostLifetime(
+  groupId: groupId,
+  postId: postId,
+  expiresAt: expiresAt,
+);
+
+/// Owner edits name / Join mode / Discoverability; `None` leaves a field
+/// untouched. Content mode has no edit path.
+Future<void> editGroupMetadata({
+  required String groupId,
+  String? name,
+  GroupJoinMode? joinMode,
+  GroupDiscoverability? discoverability,
+}) => RustLib.instance.api.crateApiCommandsEditGroupMetadata(
+  groupId: groupId,
+  name: name,
+  joinMode: joinMode,
+  discoverability: discoverability,
+);
+
+Future<void> removeGroupMember({
+  required String groupId,
+  required String memberProfileId,
+}) => RustLib.instance.api.crateApiCommandsRemoveGroupMember(
+  groupId: groupId,
+  memberProfileId: memberProfileId,
+);
+
+/// Moves the `Manage` role to another Member; the old Owner stays a plain
+/// Member until they leave.
+Future<void> transferGroupOwnership({
+  required String groupId,
+  required String toProfileId,
+}) => RustLib.instance.api.crateApiCommandsTransferGroupOwnership(
+  groupId: groupId,
+  toProfileId: toProfileId,
+);
+
+Future<void> leaveGroup({required String groupId}) =>
+    RustLib.instance.api.crateApiCommandsLeaveGroup(groupId: groupId);
+
+/// Toggle a named heart on a group post (in-group).
+Future<void> setGroupHeart({
+  required String groupId,
+  required String postAuthorProfileId,
+  required String postId,
+  required bool active,
+}) => RustLib.instance.api.crateApiCommandsSetGroupHeart(
+  groupId: groupId,
+  postAuthorProfileId: postAuthorProfileId,
+  postId: postId,
+  active: active,
+);
+
+Future<void> publishGroupComment({
+  required String groupId,
+  required String postAuthorProfileId,
+  required String postId,
+  required String body,
+}) => RustLib.instance.api.crateApiCommandsPublishGroupComment(
+  groupId: groupId,
+  postAuthorProfileId: postAuthorProfileId,
+  postId: postId,
+  body: body,
+);
+
+/// Records that the viewer opened the group place, clearing its river door.
+Future<void> markGroupOpened({required String groupId}) =>
+    RustLib.instance.api.crateApiCommandsMarkGroupOpened(groupId: groupId);
 
 /// A file staged on the composer. Voice notes carry the duration and
 /// waveform from [`crate::api::media::voice_note_summary`]; other files

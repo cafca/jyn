@@ -7,6 +7,7 @@ pub mod diagnostics;
 pub mod domain;
 mod frb_generated;
 pub mod friend_code;
+pub mod groups;
 pub mod local_stores;
 pub mod logging;
 pub mod media;

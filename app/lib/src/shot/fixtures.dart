@@ -244,7 +244,12 @@ List<JynEvent> shotEvents({
   return [
     JynEvent.profile(profile: shotProfile(now: now)),
     JynEvent.friends(friends: friends, pending: pending),
-    JynEvent.river(posts: posts, ghosts: ghosts),
+    JynEvent.river(
+      posts: posts,
+      ghosts: ghosts,
+      doors: const [],
+      groupCards: const [],
+    ),
     JynEvent.mediaReady(blobHash: 'shot-photo-blob', path: photoPath),
     JynEvent.mediaReady(blobHash: 'shot-audio-blob', path: audioPath),
     JynEvent.diagnostics(snapshot: diagnostics),

@@ -180,6 +180,7 @@ mod tests {
                 recorded_at: 10,
             }],
             tombstoned_post_ids: Vec::new(),
+            advertised_groups: Vec::new(),
         }
     }
 

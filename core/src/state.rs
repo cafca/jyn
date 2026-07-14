@@ -31,6 +31,17 @@ pub struct GhostCard {
     pub author_profile_id: String,
 }
 
+/// A named discovery card from a friend's heart on a **public + listed**
+/// group post: "♥ Bob, in *Group X*" — a pointer into the group place, the
+/// post is not copied or moved (ADR-0009).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroupDiscoveryCard {
+    pub carrier_profile_id: String,
+    pub carrier_display_name: String,
+    pub group_id: String,
+    pub group_name: String,
+}
+
 /// One post as the river renders it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RiverPost {
@@ -60,6 +71,10 @@ pub struct RiverState {
     keeps: Vec<KeepRecord>,
     pub river: Vec<RiverPost>,
     pub ghosts: Vec<GhostCard>,
+    /// Friends' hearts on public+listed group posts, one card per group.
+    /// Membership filtering happens in the runtime (which knows the
+    /// viewer's groups).
+    pub group_cards: Vec<GroupDiscoveryCard>,
     next_expiry: Option<u64>,
     dirty: bool,
 }
@@ -320,6 +335,7 @@ impl RiverState {
             .map(|post| post.author_profile_id.as_str())
             .collect();
         let mut ghosts: Vec<GhostCard> = Vec::new();
+        let mut group_cards: Vec<GroupDiscoveryCard> = Vec::new();
         for state in self.by_friend.values() {
             if !followed.contains(&state.profile_id) {
                 continue;
@@ -329,6 +345,20 @@ impl RiverState {
                 .clone()
                 .unwrap_or_else(|| short_id(&state.profile_id));
             for heart in &state.hearts {
+                // A heart carrying group context surfaces as a named door
+                // into the group (ADR-0009), never as a ghost — the post
+                // lives in the group, not on the author's profile.
+                if let (Some(group_id), Some(group_name)) = (&heart.group_id, &heart.group_name) {
+                    if !group_cards.iter().any(|card| &card.group_id == group_id) {
+                        group_cards.push(GroupDiscoveryCard {
+                            carrier_profile_id: state.profile_id.clone(),
+                            carrier_display_name: carrier.clone(),
+                            group_id: group_id.clone(),
+                            group_name: group_name.clone(),
+                        });
+                    }
+                    continue;
+                }
                 let author = heart.post_author_profile_id.as_str();
                 if author == own_id
                     || followed.iter().any(|followed| followed == author)
@@ -344,9 +374,11 @@ impl RiverState {
             }
         }
         ghosts.sort_by(|left, right| left.author_profile_id.cmp(&right.author_profile_id));
+        group_cards.sort_by(|left, right| left.group_id.cmp(&right.group_id));
 
         self.river = river;
         self.ghosts = ghosts;
+        self.group_cards = group_cards;
         self.next_expiry = next_expiry;
         self.dirty = false;
     }
@@ -387,7 +419,55 @@ mod tests {
             comments: Vec::new(),
             pending_requests: Vec::new(),
             tombstoned_post_ids: Vec::new(),
+            advertised_groups: Vec::new(),
         }
+    }
+
+    #[test]
+    fn a_friends_group_heart_becomes_a_discovery_card_not_a_ghost() {
+        use crate::domain::HeartRef;
+
+        let mut river = RiverState::default();
+        river.set_own_display_name("Me");
+        let mut own = state_with_posts("me", Vec::new());
+        own.followed_profile_ids = vec!["anna".into()];
+        river.apply_local_state(own);
+
+        // Anna hearts a post in a public+listed group (group context set)
+        // and a stranger's plain post (no group context).
+        let mut anna = state_with_posts("anna", Vec::new());
+        anna.hearts = vec![
+            HeartRef {
+                post_author_profile_id: "member-x".into(),
+                post_id: "group-post".into(),
+                recorded_at: 10,
+                group_id: Some("g-1".into()),
+                group_name: Some("reading circle".into()),
+            },
+            HeartRef {
+                post_author_profile_id: "stranger".into(),
+                post_id: "plain-post".into(),
+                recorded_at: 11,
+                group_id: None,
+                group_name: None,
+            },
+        ];
+        river.apply_contact_state("anna".into(), anna);
+
+        river.materialize(45);
+        // The group heart surfaces as a named card into the group, framed
+        // with provenance — and never doubles as a ghost door.
+        assert_eq!(
+            river.group_cards,
+            vec![GroupDiscoveryCard {
+                carrier_profile_id: "anna".into(),
+                carrier_display_name: "anna-name".into(),
+                group_id: "g-1".into(),
+                group_name: "reading circle".into(),
+            }]
+        );
+        assert_eq!(river.ghosts.len(), 1);
+        assert_eq!(river.ghosts[0].author_profile_id, "stranger");
     }
 
     #[test]

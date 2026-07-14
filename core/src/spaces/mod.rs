@@ -42,10 +42,11 @@ use tracing::{debug, warn};
 use crate::domain::{
     ensure_spaces_tables, DomainExtensions, DomainOperation, JynOperationDomain, Visibility,
 };
+use forge::JynForge;
+pub(crate) use forge::PlacementHint;
 pub use forge::SpacesOutbox;
-use forge::{JynForge, PlacementHint};
 pub use store::spaces_args_from_operation;
-use store::JynSpacesStore;
+pub(crate) use store::JynSpacesStore;
 
 /// Which of a profile's encryption spaces an operation targets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,8 +67,10 @@ impl SpaceKind {
 }
 
 /// Matches the private `GLOBAL_GROUPS_CONTEXT_ID` inside `p2panda-spaces`;
-/// the auth CRDT state is stored under this key.
-const GLOBAL_GROUPS_CONTEXT_ID: &[u8] = b"global-groups-context";
+/// the auth CRDT state is stored under this key. Shared with the groups
+/// service (which persists the same auth-graph row) so the two can never
+/// drift apart and fork the auth state.
+pub(crate) const GLOBAL_GROUPS_CONTEXT_ID: &[u8] = b"global-groups-context";
 
 /// The auto-derived circles audience: accepted friends plus every friend's
 /// friends, as read from their replicated (mandatorily visible) follow lists.
@@ -95,6 +98,18 @@ pub(crate) async fn derive_circle_members(
     let mut members: Vec<String> = members.into_iter().collect();
     members.sort();
     Ok(members)
+}
+
+/// The spaces credentials for a profile: the ed25519 identity plus an X25519
+/// key-agreement secret derived deterministically from the identity seed, so
+/// backing up `node.key` recovers the full encryption identity. Shared with
+/// the groups subsystem, which runs its own manager over the same store.
+pub(crate) fn credentials_for(private_key: &SigningKey) -> Result<Credentials> {
+    let seed = private_key.as_bytes();
+    let identity_secret_bytes = hkdf::<32>(b"jyn/identity/x25519/v1", seed, None)
+        .map_err(|err| anyhow::anyhow!("failed to derive identity secret: {err}"))?;
+    let identity_secret = secret_key_from_bytes(identity_secret_bytes)?;
+    Ok(Credentials::from_keys(private_key.clone(), identity_secret))
 }
 
 /// Builds an X25519 secret from raw bytes via its serde representation
@@ -169,10 +184,7 @@ impl JynSpaces {
         ensure_spaces_tables(&store).await?;
 
         let seed = private_key.as_bytes();
-        let identity_secret_bytes = hkdf::<32>(b"jyn/identity/x25519/v1", seed, None)
-            .map_err(|err| anyhow::anyhow!("failed to derive identity secret: {err}"))?;
-        let identity_secret = secret_key_from_bytes(identity_secret_bytes)?;
-        let credentials = Credentials::from_keys(private_key.clone(), identity_secret);
+        let credentials = credentials_for(&private_key)?;
 
         let space_seed = hkdf::<32>(b"jyn/friends-space/v1", seed, None)
             .map_err(|err| anyhow::anyhow!("failed to derive friends space id: {err}"))?;
@@ -211,6 +223,14 @@ impl JynSpaces {
 
     pub fn friends_space_id(&self) -> SpaceId {
         self.my_space_id
+    }
+
+    /// The lock serializing all operations against the shared auth graph.
+    /// The groups subsystem runs its own manager over the same store, so
+    /// both must serialize behind the same lock or concurrent persists lose
+    /// updates.
+    pub(crate) fn ops_lock(&self) -> Arc<tokio::sync::Mutex<()>> {
+        Arc::clone(&self.ops_lock)
     }
 
     fn own_space_id(&self, kind: SpaceKind) -> SpaceId {

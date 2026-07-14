@@ -257,6 +257,30 @@ async fn circles_posts_reach_friends_of_friends_until_removed() -> Result<()> {
     )
     .await?;
 
+    // The lazy re-key is best-effort *within* a publish (it must never gag
+    // the post), so the first post after a removal can race its own re-key
+    // and still seal to the old audience on a slow machine. A settle round
+    // forces convergence deterministically: publish a throwaway post and
+    // wait for its full round-trip — publishes serialize on the node, so by
+    // the time the *next* post seals, the removal is reflected in the space
+    // state and the asserted post is provably keyed without Carol.
+    bridge_a.send(circles_post("closing the circle"))?;
+    wait_for_event(
+        &bridge_b,
+        "re-key settle round at Bob",
+        |event| match event {
+            NetworkEvent::ContactStateUpdated { profile_id, state } if *profile_id == alice_id => {
+                state
+                    .posts
+                    .iter()
+                    .any(|post| post.body == "closing the circle")
+                    .then_some(())
+            }
+            _ => None,
+        },
+    )
+    .await?;
+
     bridge_a.send(circles_post("the ring tightens"))?;
     wait_for_event(
         &bridge_b,

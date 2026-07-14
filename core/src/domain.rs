@@ -36,6 +36,7 @@ use p2panda_stream::ingest::ingest_operation;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
+use crate::groups::{GroupContentMode, GroupDiscoverability, GroupGovernanceAction, GroupJoinMode};
 use crate::placement::LogBucket;
 use crate::profile::now_unix_secs;
 
@@ -43,8 +44,16 @@ use crate::profile::now_unix_secs;
 // and never exchange operations with encrypted ones.
 // v3: the co-deletion-logs flag day (ADR-0016). Log addressing and the header
 // extension layout changed incompatibly; pre-v3 clients must never exchange
-// operations with v3 ones.
+// operations with v3 ones. The same flag day introduces Groups, whose
+// `GroupMembershipAdvertised` variant on the shared Contacts topic would
+// hard-error released v2 clients.
 const DOMAIN_TOPIC_NAMESPACE: &[u8] = b"jyn/domain/v3";
+/// Sentinel `audience` carried by a Group's genesis op. The GroupId is the
+/// genesis op's *own hash* (ADR-0006), which the signed header cannot
+/// contain; ingest recognises this sentinel and derives the group topic from
+/// the operation's hash instead (see
+/// [`JynOperationDomain::append_group_operation`]).
+pub const GROUP_GENESIS_AUDIENCE: &str = "group-genesis";
 
 /// Reach of a post, chosen by its author.
 ///
@@ -236,12 +245,21 @@ pub enum DomainOperation {
         deleted_at: u64,
     },
     /// A named heart on someone's post, living in the *hearter's* log.
+    ///
+    /// A heart on a post in a **public + listed** Group is additionally
+    /// published on the hearter's profile log with the group context set, so
+    /// friends' rivers can surface a named discovery card pointing into the
+    /// group (ADR-0009). Hearts in any other group stay in-group only.
     HeartChanged {
         profile_id: String,
         post_author_profile_id: String,
         post_id: String,
         active: bool,
         recorded_at: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        group_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        group_name: Option<String>,
     },
     /// A flat-thread comment on someone's post, living in the commenter's log.
     CommentPublished {
@@ -262,12 +280,66 @@ pub enum DomainOperation {
         #[serde(with = "serde_bytes")]
         args: Vec<u8>,
     },
+    /// The genesis op of a Group. The GroupId is this op's hash (ADR-0006),
+    /// so its header carries the [`GROUP_GENESIS_AUDIENCE`] sentinel and the
+    /// group topic is derived from the hash once it is known. Content mode is
+    /// fixed here forever.
+    GroupCreated {
+        creator_profile_id: String,
+        name: String,
+        content_mode: GroupContentMode,
+        join_mode: GroupJoinMode,
+        #[serde(default)]
+        discoverability: GroupDiscoverability,
+        created_at: u64,
+    },
+    /// A governance action on a Group, authored by the member holding
+    /// `Manage` at that point in the log (validated during reduction).
+    GroupGoverned {
+        group_id: String,
+        actor_profile_id: String,
+        action: GroupGovernanceAction,
+        recorded_at: u64,
+    },
+    /// A join request, authored by the requester on the *group's* topic
+    /// (the same foreign-author pattern as [`Self::FriendshipRequested`]).
+    /// In Open join mode the Owner's node auto-accepts it; in Request mode
+    /// it stays pending until the Owner answers (ADR-0005).
+    GroupJoinRequested {
+        group_id: String,
+        requester_profile_id: String,
+        requester_display_name: String,
+        #[serde(default)]
+        greeting: Option<String>,
+        recorded_at: u64,
+    },
+    /// A member leaving, self-authored — effective immediately, no Owner
+    /// liveness needed (ADR-0003).
+    GroupLeft {
+        group_id: String,
+        member_profile_id: String,
+        recorded_at: u64,
+    },
+    /// Membership advertisement (ADR-0008): a member disclosing their *own*
+    /// membership edge ("I'm in G") to their *own* friends, riding the same
+    /// friend-visible profile state that carries follow lists. Published for
+    /// `listed` groups only; retracted (`active: false`) on leave, removal,
+    /// or the group going `unlisted`. Distinct from roster visibility.
+    GroupMembershipAdvertised {
+        profile_id: String,
+        group_id: String,
+        group_name: String,
+        active: bool,
+        recorded_at: u64,
+    },
 }
 
 impl DomainOperation {
     /// The profile whose topic carries this operation. For friendship
-    /// requests this is the *target*, not the (requester) author.
-    fn profile_id(&self) -> &str {
+    /// requests this is the *target*, not the (requester) author. Group
+    /// operations have no carrier profile — their audience is the group,
+    /// via [`JynOperationDomain::append_group_operation`].
+    fn profile_id(&self) -> Option<&str> {
         match self {
             Self::ProfileUpdated { profile_id, .. }
             | Self::ContactFollowChanged { profile_id, .. }
@@ -277,13 +349,18 @@ impl DomainOperation {
             | Self::PostDeleted { profile_id, .. }
             | Self::HeartChanged { profile_id, .. }
             | Self::CommentPublished { profile_id, .. }
-            | Self::Spaces { profile_id, .. } => profile_id,
+            | Self::Spaces { profile_id, .. }
+            | Self::GroupMembershipAdvertised { profile_id, .. } => Some(profile_id),
             Self::FriendshipRequested {
                 target_profile_id, ..
-            } => target_profile_id,
+            } => Some(target_profile_id),
             Self::FriendshipResponded {
                 target_profile_id, ..
-            } => target_profile_id,
+            } => Some(target_profile_id),
+            Self::GroupCreated { .. }
+            | Self::GroupGoverned { .. }
+            | Self::GroupJoinRequested { .. }
+            | Self::GroupLeft { .. } => None,
         }
     }
 
@@ -354,11 +431,25 @@ impl ReducedPost {
     }
 }
 
-/// An active heart cast by this profile on someone's post.
+/// An active heart cast by this profile on someone's post. Group context is
+/// set only for hearts on public + listed group posts (ADR-0009) — the data
+/// a friend's river needs to build the discovery card into the group.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HeartRef {
     pub post_author_profile_id: String,
     pub post_id: String,
+    pub recorded_at: u64,
+    #[serde(default)]
+    pub group_id: Option<String>,
+    #[serde(default)]
+    pub group_name: Option<String>,
+}
+
+/// A group membership this profile advertises to its friends (ADR-0008).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdvertisedGroup {
+    pub group_id: String,
+    pub group_name: String,
     pub recorded_at: u64,
 }
 
@@ -399,6 +490,10 @@ pub struct ReducedProfileState {
     pub pending_requests: Vec<PendingFriendRequest>,
     /// Post ids the author has deleted; used to kill kept copies.
     pub tombstoned_post_ids: Vec<String>,
+    /// Group memberships this profile advertises to its friends
+    /// (`listed` groups only, ADR-0008).
+    #[serde(default)]
+    pub advertised_groups: Vec<AdvertisedGroup>,
 }
 
 impl ReducedProfileState {
@@ -459,7 +554,14 @@ impl JynOperationDomain {
         match operation {
             DomainOperation::ProfileUpdated { .. } => Ok(DomainLogId::PROFILE),
             DomainOperation::ContactFollowChanged { .. }
-            | DomainOperation::FriendshipResponded { .. } => Ok(DomainLogId::CONTACTS),
+            | DomainOperation::FriendshipResponded { .. }
+            | DomainOperation::GroupMembershipAdvertised { .. } => Ok(DomainLogId::CONTACTS),
+            DomainOperation::GroupCreated { .. }
+            | DomainOperation::GroupGoverned { .. }
+            | DomainOperation::GroupJoinRequested { .. }
+            | DomainOperation::GroupLeft { .. } => {
+                anyhow::bail!("group operations live on group topics; use append_group_operation")
+            }
             DomainOperation::Spaces { .. } => Ok(DomainLogId::SPACES_CONTROL),
             // One log per request target: a request log is associated with the
             // target's topic, so sharing one log across targets would leak
@@ -555,6 +657,20 @@ impl JynOperationDomain {
         if let Some(existing) = self.registered_log_id(context).await? {
             return Ok(existing);
         }
+        let allocated = self.allocate_log_id().await?;
+        self.register_log_id(context, allocated).await?;
+        self.registered_log_id(context)
+            .await?
+            .context("domain log registry lost a just-inserted context")
+    }
+
+    /// Draws the next dynamic log id from the monotonic counter without
+    /// binding it to a registry context yet. Needed by the one caller that
+    /// cannot know its context before signing: a Group's genesis op, whose
+    /// context is the GroupId — the hash of the header the id must already
+    /// be inside (see [`Self::append_group_operation`]).
+    async fn allocate_log_id(&self) -> Result<DomainLogId> {
+        ensure_domain_log_tables(&self.store).await?;
         let (allocated,): (i64,) = sqlx::query_as(
             "UPDATE jyn_log_allocator SET next_log_id = next_log_id + 1 WHERE id = 0
              RETURNING next_log_id - 1",
@@ -562,15 +678,18 @@ impl JynOperationDomain {
         .fetch_one(self.store.pool())
         .await
         .context("failed to allocate domain log id")?;
+        Ok(DomainLogId(allocated as u64))
+    }
+
+    async fn register_log_id(&self, context: &str, log_id: DomainLogId) -> Result<()> {
+        ensure_domain_log_tables(&self.store).await?;
         sqlx::query("INSERT OR IGNORE INTO jyn_log_registry (context, log_id) VALUES (?, ?)")
             .bind(context)
-            .bind(allocated)
+            .bind(log_id.0 as i64)
             .execute(self.store.pool())
             .await
             .context("failed to register domain log id")?;
-        self.registered_log_id(context)
-            .await?
-            .context("domain log registry lost a just-inserted context")
+        Ok(())
     }
 
     async fn registered_log_id(&self, context: &str) -> Result<Option<DomainLogId>> {
@@ -612,9 +731,226 @@ impl JynOperationDomain {
             );
         }
 
-        let profile_id = operation.profile_id().to_owned();
-        let body_bytes = encode_cbor(&operation).context("failed to encode domain body")?;
-        let body = Body::from(body_bytes.clone());
+        let profile_id = operation
+            .profile_id()
+            .context("group operations belong on a group log; use append_group_operation")?
+            .to_owned();
+        // Chain the ordering timestamp off the newest operation known for this
+        // profile (from any author and device) so new operations always sort
+        // after everything they were created in response to, even when wall
+        // clocks are skewed or frozen. Header-only read: chaining must survive
+        // ops whose body this binary can't decode (a newer peer's variant) —
+        // the timestamp lives in the header, so skipping undecodable bodies
+        // here would let a new op stamp *before* what it responds to.
+        let previous_ordering = self
+            .operations_for_profile_raw(&profile_id)
+            .await?
+            .into_iter()
+            .map(|operation| operation.header.extensions.ordering_timestamp)
+            .max();
+        let header = self
+            .sign_header(
+                private_key,
+                log_id,
+                &profile_id,
+                previous_ordering,
+                &operation,
+            )
+            .await?;
+        self.ingest_signed(
+            &header,
+            &log_id,
+            profile_sync_topic(&profile_id),
+            &operation,
+        )
+        .await?;
+        Ok(header)
+    }
+
+    /// Appends an operation to the author's log for a group and associates
+    /// it with the group's replication topic — never with any profile topic,
+    /// so group content stays exclusively in the group (ADR-0007). Placement
+    /// mirrors the profile scheme, scoped per group (ADR-0018): governance
+    /// and control on the group's permanent control log, posts in expiry
+    /// buckets, reactions in their own month buckets — see
+    /// [`Self::group_log_id_for`].
+    ///
+    /// `group_id` is `None` only for the genesis op, which *mints* the
+    /// GroupId as its own hash (ADR-0006): its log id is drawn from the
+    /// allocator before signing and bound to the group's control context
+    /// after, and its header carries the [`GROUP_GENESIS_AUDIENCE`] sentinel
+    /// so remote ingest can derive the group topic from the op's hash
+    /// without decoding the body.
+    pub async fn append_group_operation(
+        &mut self,
+        private_key: &SigningKey,
+        group_id: Option<&str>,
+        operation: DomainOperation,
+    ) -> Result<Header<DomainExtensions>> {
+        let is_genesis = matches!(operation, DomainOperation::GroupCreated { .. });
+        anyhow::ensure!(
+            is_genesis == group_id.is_none(),
+            "genesis ops mint their GroupId from their own hash; all other group ops name their group"
+        );
+        match group_id {
+            Some(group_id) => {
+                self.append_group_operation_in_log(private_key, group_id, operation, None)
+                    .await
+            }
+            None => {
+                let log_id = self.allocate_log_id().await?;
+                let header = self
+                    .sign_header(
+                        private_key,
+                        log_id,
+                        GROUP_GENESIS_AUDIENCE,
+                        None,
+                        &operation,
+                    )
+                    .await?;
+                let group_id = header.hash().to_string();
+                self.register_log_id(&group_control_context(&group_id), log_id)
+                    .await?;
+                self.ingest_signed(&header, &log_id, group_sync_topic(&group_id), &operation)
+                    .await?;
+                Ok(header)
+            }
+        }
+    }
+
+    /// Appends a (non-genesis) group operation into an explicitly chosen
+    /// log, or — when `log_id` is `None` — into the log
+    /// [`Self::group_log_id_for`] computes. Only the groups forge should
+    /// need the explicit form: an encrypted application payload's placement
+    /// is computed from its *inner* operation, which is opaque by the time
+    /// the wrapper reaches this method (ADR-0018).
+    pub(crate) async fn append_group_operation_in_log(
+        &mut self,
+        private_key: &SigningKey,
+        group_id: &str,
+        operation: DomainOperation,
+        log_id: Option<DomainLogId>,
+    ) -> Result<Header<DomainExtensions>> {
+        anyhow::ensure!(
+            !matches!(operation, DomainOperation::GroupCreated { .. }),
+            "genesis ops go through append_group_operation"
+        );
+        let log_id = match log_id {
+            Some(log_id) => log_id,
+            None => self.group_log_id_for(group_id, &operation).await?,
+        };
+        // Header-only read, as in `append_operation_in_log`.
+        let previous_ordering = self
+            .operations_for_group_raw(group_id)
+            .await?
+            .into_iter()
+            .map(|operation| operation.header.extensions.ordering_timestamp)
+            .max();
+        let header = self
+            .sign_header(private_key, log_id, group_id, previous_ordering, &operation)
+            .await?;
+        self.ingest_signed(&header, &log_id, group_sync_topic(group_id), &operation)
+            .await?;
+        Ok(header)
+    }
+
+    /// Resolves the co-deletion log a group operation belongs in — the
+    /// profile placement scheme of [`Self::log_id_for`], scoped per group
+    /// (ADR-0018):
+    ///
+    /// - Posts are placed by their own expiry; their edits, tombstone and
+    ///   re-home marker follow the log the post's current copy lives in.
+    /// - Hearts and comments are placed by their own creation month,
+    ///   reaped reactively when their target dies (never re-homed).
+    /// - Everything else — governance, join/leave, and `Spaces` wrappers
+    ///   (control traffic; encrypted *posts* arrive with an explicit
+    ///   placement instead, see [`Self::append_group_operation_in_log`]) —
+    ///   lands on the group's permanent control log, which GC never drains:
+    ///   membership history must outlive any post.
+    pub(crate) async fn group_log_id_for(
+        &self,
+        group_id: &str,
+        operation: &DomainOperation,
+    ) -> Result<DomainLogId> {
+        let now = now_unix_secs();
+        let context = match operation {
+            DomainOperation::PostPublished {
+                expires_at,
+                created_at,
+                ..
+            } => group_bucket_context(group_id, &LogBucket::place(*expires_at, *created_at, now)),
+            DomainOperation::PostEdited {
+                profile_id,
+                post_id,
+                edited_at: at,
+                ..
+            }
+            | DomainOperation::PostRehomed {
+                profile_id,
+                post_id,
+                moved_at: at,
+            }
+            | DomainOperation::PostDeleted {
+                profile_id,
+                post_id,
+                deleted_at: at,
+            } => match self
+                .current_group_post_log(group_id, profile_id, post_id)
+                .await?
+            {
+                Some(log_id) => return Ok(log_id),
+                None => group_bucket_context(group_id, &LogBucket::place(None, *at, now)),
+            },
+            DomainOperation::HeartChanged {
+                recorded_at: at, ..
+            }
+            | DomainOperation::CommentPublished { created_at: at, .. } => {
+                group_bucket_context(group_id, &LogBucket::place_reaction(*at))
+            }
+            _ => group_control_context(group_id),
+        };
+        self.log_id_for_context(&context).await
+    }
+
+    /// The log holding a group post's current (newest) published copy from
+    /// its author's stored operations — [`Self::current_post_log`] for the
+    /// group topic. Encrypted posts resolve through their decrypted inner
+    /// op, whose `StoredDomainOperation` carries the wrapper's log id.
+    async fn current_group_post_log(
+        &self,
+        group_id: &str,
+        profile_id: &str,
+        post_id: &str,
+    ) -> Result<Option<DomainLogId>> {
+        let operations = self.operations_for_group(group_id).await?;
+        Ok(operations
+            .into_iter()
+            .filter(|op| {
+                op.author.to_string() == profile_id
+                    && matches!(
+                        &op.operation,
+                        DomainOperation::PostPublished { post_id: id, .. } if id == post_id
+                    )
+            })
+            .max_by(|left, right| {
+                left.header
+                    .extensions
+                    .ordering_timestamp
+                    .cmp(&right.header.extensions.ordering_timestamp)
+            })
+            .map(|op| op.log_id))
+    }
+
+    async fn sign_header(
+        &self,
+        private_key: &SigningKey,
+        log_id: DomainLogId,
+        audience: &str,
+        previous_ordering: Option<HybridTimestamp>,
+        operation: &DomainOperation,
+    ) -> Result<Header<DomainExtensions>> {
+        let body_bytes = encode_cbor(operation).context("failed to encode domain body")?;
+        let body = Body::from(body_bytes);
         let latest: Option<Operation<DomainExtensions>> = self
             .store
             .get_latest_entry(&private_key.verifying_key(), &log_id)
@@ -625,15 +961,6 @@ impl JynOperationDomain {
             .map(|operation| (operation.header.seq_num + 1, Some(operation.hash)))
             .unwrap_or((0, None));
 
-        // Chain the ordering timestamp off the newest operation known for this profile (from any
-        // author and device) so new operations always sort after everything they were created in
-        // response to, even when wall clocks are skewed or frozen.
-        let previous_ordering = self
-            .operations_for_profile(&profile_id)
-            .await?
-            .into_iter()
-            .map(|operation| operation.header.extensions.ordering_timestamp)
-            .max();
         let ordering_timestamp = next_ordering_timestamp(previous_ordering);
         let mut header = Header {
             version: 1,
@@ -645,23 +972,31 @@ impl JynOperationDomain {
             backlink,
             extensions: DomainExtensions {
                 log_id,
-                audience: profile_id.clone(),
+                audience: audience.to_owned(),
                 ordering_timestamp,
             },
         };
         header.sign(private_key);
+        Ok(header)
+    }
 
+    async fn ingest_signed(
+        &mut self,
+        header: &Header<DomainExtensions>,
+        log_id: &DomainLogId,
+        topic: Topic,
+        operation: &DomainOperation,
+    ) -> Result<()> {
+        let body_bytes = encode_cbor(operation).context("failed to encode domain body")?;
         let operation = Operation {
             hash: header.hash(),
             header: header.clone(),
-            body: Some(body),
+            body: Some(Body::from(body_bytes)),
         };
-        let topic = profile_sync_topic(&profile_id);
-        ingest_operation(&self.store, &operation, &log_id, &topic, false)
+        ingest_operation(&self.store, &operation, log_id, &topic, false)
             .await
             .map_err(|err| anyhow::anyhow!("failed to ingest domain operation: {err}"))?;
-
-        Ok(header)
+        Ok(())
     }
 
     pub async fn ingest_remote_operation(
@@ -672,7 +1007,18 @@ impl JynOperationDomain {
         // The topic derives from the header's audience field, not the log id
         // (ADR-0016). A forged audience only mis-shelves the author's own
         // operations: reduction drops foreign-authored operations anyway.
-        let topic = profile_sync_topic(&operation.header.extensions.audience);
+        // The one audience that is not a literal topic handle is the group
+        // genesis sentinel: a genesis op mints its GroupId — its own hash —
+        // which the signed header cannot contain, so the group topic is
+        // derived from the hash instead. Routing stays header-only either
+        // way: a newer client's genesis must land on the right topic even
+        // when this binary cannot decode its body.
+        let audience = &operation.header.extensions.audience;
+        let topic = if audience == GROUP_GENESIS_AUDIENCE {
+            group_sync_topic(&operation.hash.to_string())
+        } else {
+            profile_sync_topic(audience)
+        };
 
         ingest_operation(&self.store, &operation, &log_id, &topic, false)
             .await
@@ -705,10 +1051,12 @@ impl JynOperationDomain {
         let mut posts = HashMap::<String, ReducedPost>::new();
         let mut tombstones = HashSet::<String>::new();
         let mut follows = HashMap::<String, bool>::new();
-        let mut hearts = HashMap::<(String, String), Option<u64>>::new();
+        let mut hearts =
+            HashMap::<(String, String), Option<(u64, Option<String>, Option<String>)>>::new();
         let mut comments = HashMap::<String, ReducedComment>::new();
         let mut requests = HashMap::<String, PendingFriendRequest>::new();
         let mut responded = HashSet::<String>::new();
+        let mut advertised = HashMap::<String, Option<AdvertisedGroup>>::new();
 
         for op in operations {
             let author_id = op.author.to_string();
@@ -831,11 +1179,13 @@ impl JynOperationDomain {
                     post_id,
                     active,
                     recorded_at,
+                    group_id,
+                    group_name,
                     ..
                 } => {
                     hearts.insert(
                         (post_author_profile_id, post_id),
-                        active.then_some(recorded_at),
+                        active.then_some((recorded_at, group_id, group_name)),
                     );
                 }
                 DomainOperation::CommentPublished {
@@ -862,6 +1212,33 @@ impl JynOperationDomain {
                     // operation in `operations_for_profile`; one reaching
                     // reduction is a control message or undecryptable payload.
                 }
+                DomainOperation::GroupMembershipAdvertised {
+                    group_id,
+                    group_name,
+                    active,
+                    recorded_at,
+                    ..
+                } => {
+                    advertised.insert(
+                        group_id.clone(),
+                        active.then_some(AdvertisedGroup {
+                            group_id,
+                            group_name,
+                            recorded_at,
+                        }),
+                    );
+                }
+                DomainOperation::GroupCreated { .. }
+                | DomainOperation::GroupGoverned { .. }
+                | DomainOperation::GroupJoinRequested { .. }
+                | DomainOperation::GroupLeft { .. } => {
+                    // Group operations live on group topics; one showing up
+                    // in a profile reduction is a routing bug or a forgery.
+                    warn!(
+                        profile = %profile_id,
+                        "ignoring group operation during profile reduction"
+                    );
+                }
             }
         }
 
@@ -882,11 +1259,13 @@ impl JynOperationDomain {
 
         let mut hearts = hearts
             .into_iter()
-            .filter_map(|((post_author_profile_id, post_id), recorded_at)| {
-                recorded_at.map(|recorded_at| HeartRef {
+            .filter_map(|((post_author_profile_id, post_id), heart)| {
+                heart.map(|(recorded_at, group_id, group_name)| HeartRef {
                     post_author_profile_id,
                     post_id,
                     recorded_at,
+                    group_id,
+                    group_name,
                 })
             })
             .collect::<Vec<_>>();
@@ -925,6 +1304,13 @@ impl JynOperationDomain {
         let mut tombstoned_post_ids = tombstones.into_iter().collect::<Vec<_>>();
         tombstoned_post_ids.sort();
 
+        let mut advertised_groups = advertised.into_values().flatten().collect::<Vec<_>>();
+        advertised_groups.sort_by(|left, right| {
+            left.recorded_at
+                .cmp(&right.recorded_at)
+                .then_with(|| left.group_id.cmp(&right.group_id))
+        });
+
         Ok(Some(ReducedProfileState {
             profile_id: profile_id.to_owned(),
             display_name,
@@ -937,6 +1323,7 @@ impl JynOperationDomain {
             comments,
             pending_requests,
             tombstoned_post_ids,
+            advertised_groups,
         }))
     }
 
@@ -944,7 +1331,17 @@ impl JynOperationDomain {
         &self,
         profile_id: &str,
     ) -> Result<Vec<StoredDomainOperation>> {
-        let topic = profile_sync_topic(profile_id);
+        self.operations_for_topic(profile_sync_topic(profile_id))
+            .await
+    }
+
+    /// All decoded operations on a group's topic: the genesis, governance,
+    /// join requests, and every member's group posts and interactions.
+    pub async fn operations_for_group(&self, group_id: &str) -> Result<Vec<StoredDomainOperation>> {
+        self.operations_for_topic(group_sync_topic(group_id)).await
+    }
+
+    async fn operations_for_topic(&self, topic: Topic) -> Result<Vec<StoredDomainOperation>> {
         let associations =
             TopicStore::<Topic, VerifyingKey, DomainLogId>::resolve(&self.store, &topic)
                 .await
@@ -973,9 +1370,17 @@ impl JynOperationDomain {
                     let Some(body) = operation.body else {
                         continue;
                     };
+                    // An undecodable body (unlike the body-less case above) is
+                    // an operation from a newer op set or a corrupt one; it
+                    // must not poison the whole context's reduction.
                     let mut domain_operation =
-                        decode_cbor::<DomainOperation, _>(&body.to_bytes()[..])
-                            .context("failed to decode domain body")?;
+                        match decode_cbor::<DomainOperation, _>(&body.to_bytes()[..]) {
+                            Ok(operation) => operation,
+                            Err(err) => {
+                                warn!("skipping undecodable domain operation: {err}");
+                                continue;
+                            }
+                        };
                     if let DomainOperation::Spaces { .. } = &domain_operation {
                         // Substitute the wrapper with its decrypted inner
                         // operation; control messages and payloads we cannot
@@ -1007,7 +1412,23 @@ impl JynOperationDomain {
         &self,
         profile_id: &str,
     ) -> Result<Vec<Operation<DomainExtensions>>> {
-        let topic = profile_sync_topic(profile_id);
+        self.operations_for_topic_raw(profile_sync_topic(profile_id))
+            .await
+    }
+
+    /// Like [`Self::operations_for_profile_raw`], for a group's topic.
+    pub async fn operations_for_group_raw(
+        &self,
+        group_id: &str,
+    ) -> Result<Vec<Operation<DomainExtensions>>> {
+        self.operations_for_topic_raw(group_sync_topic(group_id))
+            .await
+    }
+
+    async fn operations_for_topic_raw(
+        &self,
+        topic: Topic,
+    ) -> Result<Vec<Operation<DomainExtensions>>> {
         let associations =
             TopicStore::<Topic, VerifyingKey, DomainLogId>::resolve(&self.store, &topic)
                 .await
@@ -1568,7 +1989,7 @@ pub async fn ensure_spaces_tables(store: &SqliteStore) -> Result<()> {
     Ok(())
 }
 
-fn sort_for_reduction(operations: &mut [StoredDomainOperation]) {
+pub(crate) fn sort_for_reduction(operations: &mut [StoredDomainOperation]) {
     operations.sort_by(|left, right| {
         left.header
             .extensions
@@ -1580,12 +2001,40 @@ fn sort_for_reduction(operations: &mut [StoredDomainOperation]) {
     });
 }
 
-pub fn profile_sync_topic(profile_id: &str) -> Topic {
-    let mut bytes = Vec::with_capacity(DOMAIN_TOPIC_NAMESPACE.len() + profile_id.len() + 1);
+/// One audience-keyed topic space (ADR-0016): the sync topic is derived from
+/// the header's `audience` string, whatever it names. A profile's audience is
+/// its id (an ed25519 key); a Group's audience is its GroupId (an operation
+/// hash) — the two can never collide. [`profile_sync_topic`] and
+/// [`group_sync_topic`] are the documented views of this one derivation.
+fn sync_topic(audience: &str) -> Topic {
+    let mut bytes = Vec::with_capacity(DOMAIN_TOPIC_NAMESPACE.len() + audience.len() + 1);
     bytes.extend_from_slice(DOMAIN_TOPIC_NAMESPACE);
     bytes.push(b'/');
-    bytes.extend_from_slice(profile_id.as_bytes());
+    bytes.extend_from_slice(audience.as_bytes());
     Hash::digest(&bytes).into()
+}
+
+pub fn profile_sync_topic(profile_id: &str) -> Topic {
+    sync_topic(profile_id)
+}
+
+/// The replication topic of a Group, derived from its GroupId (ADR-0007).
+pub fn group_sync_topic(group_id: &str) -> Topic {
+    sync_topic(group_id)
+}
+
+/// The registry context of an author's permanent control log for a group
+/// (ADR-0018): genesis, governance, join/leave, and spaces control traffic.
+/// Never drained by GC — membership history must outlive any post.
+fn group_control_context(group_id: &str) -> String {
+    format!("group/{group_id}/control")
+}
+
+/// The registry context of a group-scoped co-deletion bucket (ADR-0018):
+/// the profile bucket scheme (`LogBucket`), prefixed per group so the log
+/// stays on the group's topic.
+fn group_bucket_context(group_id: &str, bucket: &LogBucket) -> String {
+    format!("group/{group_id}/{}", bucket.context_key())
 }
 
 /// Returns a hybrid timestamp strictly after `previous` (when given) and never behind the local
@@ -1812,6 +2261,8 @@ mod tests {
             post_id: "post-1".into(),
             active: true,
             recorded_at: month_secs,
+            group_id: None,
+            group_name: None,
         };
         // A reaction is placed by its own creation month — never the post's
         // bucket — so a later lifetime change to the post can't strand it.
@@ -2187,6 +2638,8 @@ mod tests {
             post_id: "their-post".into(),
             active,
             recorded_at,
+            group_id: None,
+            group_name: None,
         };
         domain.append_operation(&key, heart(true, 10)).await?;
         domain.append_operation(&key, heart(false, 20)).await?;
@@ -2202,9 +2655,454 @@ mod tests {
                 post_author_profile_id: friend_id,
                 post_id: "their-post".into(),
                 recorded_at: 30,
+                group_id: None,
+                group_name: None,
             }]
         );
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn membership_advertisements_reduce_to_the_active_set() -> Result<()> {
+        let key = SigningKey::generate();
+        let profile_id = key.verifying_key().to_string();
+        let mut domain = JynOperationDomain::new(SqliteStore::temporary().await);
+
+        let advertise = |group_id: &str, name: &str, active: bool, at: u64| {
+            DomainOperation::GroupMembershipAdvertised {
+                profile_id: profile_id.clone(),
+                group_id: group_id.to_owned(),
+                group_name: name.to_owned(),
+                active,
+                recorded_at: at,
+            }
+        };
+        domain
+            .append_operation(&key, advertise("g-1", "reading circle", true, 10))
+            .await?;
+        domain
+            .append_operation(&key, advertise("g-2", "casting club", true, 11))
+            .await?;
+        // g-1 renamed: re-advertised under the new name.
+        domain
+            .append_operation(&key, advertise("g-1", "evening reading circle", true, 20))
+            .await?;
+        // g-2 left (or went unlisted): retracted.
+        domain
+            .append_operation(&key, advertise("g-2", "casting club", false, 21))
+            .await?;
+
+        let state = domain
+            .read_profile_state(&profile_id)
+            .await?
+            .expect("state exists");
+        assert_eq!(state.advertised_groups.len(), 1);
+        assert_eq!(state.advertised_groups[0].group_id, "g-1");
+        assert_eq!(
+            state.advertised_groups[0].group_name,
+            "evening reading circle"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn hearts_keep_their_group_context_through_reduction() -> Result<()> {
+        let key = SigningKey::generate();
+        let profile_id = key.verifying_key().to_string();
+        let friend_id = SigningKey::generate().verifying_key().to_string();
+        let mut domain = JynOperationDomain::new(SqliteStore::temporary().await);
+
+        domain
+            .append_operation(
+                &key,
+                DomainOperation::HeartChanged {
+                    profile_id: profile_id.clone(),
+                    post_author_profile_id: friend_id.clone(),
+                    post_id: "group-post".into(),
+                    active: true,
+                    recorded_at: 10,
+                    group_id: Some("g-1".into()),
+                    group_name: Some("reading circle".into()),
+                },
+            )
+            .await?;
+
+        let state = domain
+            .read_profile_state(&profile_id)
+            .await?
+            .expect("state exists");
+        assert_eq!(state.hearts.len(), 1);
+        assert_eq!(state.hearts[0].group_id.as_deref(), Some("g-1"));
+        assert_eq!(
+            state.hearts[0].group_name.as_deref(),
+            Some("reading circle")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn group_governance_shares_the_control_log_and_the_group_topic() -> Result<()> {
+        let creator = SigningKey::generate();
+        let creator_id = creator.verifying_key().to_string();
+        let mut domain = JynOperationDomain::new(SqliteStore::temporary().await);
+
+        let genesis = domain
+            .append_group_operation(
+                &creator,
+                None,
+                DomainOperation::GroupCreated {
+                    creator_profile_id: creator_id.clone(),
+                    name: "reading circle".into(),
+                    content_mode: GroupContentMode::Public,
+                    join_mode: GroupJoinMode::Open,
+                    discoverability: GroupDiscoverability::Listed,
+                    created_at: 10,
+                },
+            )
+            .await?;
+        let group_id = genesis.hash().to_string();
+        assert_eq!(genesis.extensions.audience, GROUP_GENESIS_AUDIENCE);
+        assert!(genesis.extensions.log_id.0 >= DomainLogId::FIRST_DYNAMIC);
+
+        // Governance by the creator lands in the same permanent control log
+        // as the genesis, with the group as its audience (ADR-0018).
+        let follow_up = domain
+            .append_group_operation(
+                &creator,
+                Some(&group_id),
+                DomainOperation::GroupGoverned {
+                    group_id: group_id.clone(),
+                    actor_profile_id: creator_id.clone(),
+                    action: GroupGovernanceAction::EditMetadata {
+                        name: Some("evening reading circle".into()),
+                        join_mode: None,
+                        discoverability: None,
+                    },
+                    recorded_at: 20,
+                },
+            )
+            .await?;
+        assert_eq!(follow_up.extensions.log_id, genesis.extensions.log_id);
+        assert_eq!(follow_up.extensions.audience, group_id);
+        assert_eq!(follow_up.seq_num, genesis.seq_num + 1);
+
+        // Both ops resolve through the group topic; the profile topic stays
+        // empty (ADR-0007: group content never leaks onto profile topics).
+        let group_ops = domain.operations_for_group(&group_id).await?;
+        assert_eq!(group_ops.len(), 2);
+        assert!(domain.operations_for_profile(&creator_id).await?.is_empty());
+
+        // Another author (a joining member) gets their own per-group log.
+        let member = SigningKey::generate();
+        let member_id = member.verifying_key().to_string();
+        domain
+            .append_group_operation(
+                &member,
+                Some(&group_id),
+                DomainOperation::GroupJoinRequested {
+                    group_id: group_id.clone(),
+                    requester_profile_id: member_id.clone(),
+                    requester_display_name: "member".into(),
+                    greeting: None,
+                    recorded_at: 30,
+                },
+            )
+            .await?;
+        let group_ops = domain.operations_for_group(&group_id).await?;
+        assert_eq!(group_ops.len(), 3);
+        Ok(())
+    }
+
+    /// Creates a public group and returns its GroupId (ADR-0018 tests).
+    async fn mint_group(domain: &mut JynOperationDomain, creator: &SigningKey) -> Result<String> {
+        let header = domain
+            .append_group_operation(
+                creator,
+                None,
+                DomainOperation::GroupCreated {
+                    creator_profile_id: creator.verifying_key().to_string(),
+                    name: "reading circle".into(),
+                    content_mode: GroupContentMode::Public,
+                    join_mode: GroupJoinMode::Open,
+                    discoverability: GroupDiscoverability::Listed,
+                    created_at: 10,
+                },
+            )
+            .await?;
+        Ok(header.hash().to_string())
+    }
+
+    fn group_post(
+        profile_id: &str,
+        post_id: &str,
+        expires_at: Option<u64>,
+        created_at: u64,
+    ) -> DomainOperation {
+        DomainOperation::PostPublished {
+            profile_id: profile_id.to_owned(),
+            post_id: post_id.to_owned(),
+            body: "in the group".to_owned(),
+            media: Vec::new(),
+            visibility: Visibility::Public,
+            expires_at,
+            created_at,
+            edited: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn group_posts_bucket_by_expiry_and_reactions_by_month() -> Result<()> {
+        let creator = SigningKey::generate();
+        let creator_id = creator.verifying_key().to_string();
+        let mut domain = JynOperationDomain::new(SqliteStore::temporary().await);
+        let group_id = mint_group(&mut domain, &creator).await?;
+        let control_log = domain
+            .operations_for_group_raw(&group_id)
+            .await?
+            .first()
+            .expect("genesis stored")
+            .header
+            .extensions
+            .log_id;
+
+        // Two posts whose (past) expiries fall into the same 6h window share
+        // one bucket log — distinct from the control log; a permanent post
+        // goes to its post-month bucket instead.
+        let first = domain
+            .append_group_operation(
+                &creator,
+                Some(&group_id),
+                group_post(&creator_id, "p-1", Some(9_000_000), 5),
+            )
+            .await?;
+        let second = domain
+            .append_group_operation(
+                &creator,
+                Some(&group_id),
+                group_post(&creator_id, "p-2", Some(9_000_010), 5),
+            )
+            .await?;
+        let permanent = domain
+            .append_group_operation(
+                &creator,
+                Some(&group_id),
+                group_post(&creator_id, "p-3", None, 5),
+            )
+            .await?;
+        assert_eq!(first.extensions.log_id, second.extensions.log_id);
+        assert_ne!(first.extensions.log_id, control_log);
+        assert_ne!(permanent.extensions.log_id, first.extensions.log_id);
+
+        // A heart lives in its own month bucket, apart from posts and control.
+        let heart = domain
+            .append_group_operation(
+                &creator,
+                Some(&group_id),
+                DomainOperation::HeartChanged {
+                    profile_id: creator_id.clone(),
+                    post_author_profile_id: creator_id.clone(),
+                    post_id: "p-1".into(),
+                    active: true,
+                    recorded_at: 9_000_000,
+                    group_id: None,
+                    group_name: None,
+                },
+            )
+            .await?;
+        assert_ne!(heart.extensions.log_id, first.extensions.log_id);
+        assert_ne!(heart.extensions.log_id, control_log);
+
+        // An edit follows the log its post's current copy lives in.
+        let edit = domain
+            .append_group_operation(
+                &creator,
+                Some(&group_id),
+                DomainOperation::PostEdited {
+                    profile_id: creator_id.clone(),
+                    post_id: "p-1".into(),
+                    body: "edited".into(),
+                    media: None,
+                    edited_at: 6,
+                },
+            )
+            .await?;
+        assert_eq!(edit.extensions.log_id, first.extensions.log_id);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn drained_group_buckets_drop_and_the_control_log_survives() -> Result<()> {
+        let creator = SigningKey::generate();
+        let creator_id = creator.verifying_key().to_string();
+        let mut domain = JynOperationDomain::new(SqliteStore::temporary().await);
+        let group_id = mint_group(&mut domain, &creator).await?;
+
+        domain
+            .append_group_operation(
+                &creator,
+                Some(&group_id),
+                group_post(&creator_id, "p-1", Some(9_000_000), 5),
+            )
+            .await?;
+        domain
+            .append_group_operation(
+                &creator,
+                Some(&group_id),
+                DomainOperation::HeartChanged {
+                    profile_id: creator_id.clone(),
+                    post_author_profile_id: creator_id.clone(),
+                    post_id: "p-1".into(),
+                    active: true,
+                    recorded_at: 9_000_000,
+                    group_id: None,
+                    group_name: None,
+                },
+            )
+            .await?;
+
+        // The post is long expired: its reaction reaps, then both the expiry
+        // bucket and the drained reaction month drop whole — while the
+        // genesis stays put on the control log.
+        let dead = HashSet::from([(creator_id.clone(), "p-1".to_owned())]);
+        domain
+            .reap_reactions_for_dead_targets(&group_id, &dead)
+            .await?;
+        let freed = domain
+            .drop_drained_buckets(&group_id, &creator_id, FUTURE, &dead)
+            .await?;
+        assert!(freed.post_ids.contains("p-1"));
+
+        let remaining = domain.operations_for_group(&group_id).await?;
+        assert_eq!(remaining.len(), 1);
+        assert!(matches!(
+            remaining[0].operation,
+            DomainOperation::GroupCreated { .. }
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_rehomed_group_posts_old_bucket_drains_without_freeing_its_media() -> Result<()> {
+        let creator = SigningKey::generate();
+        let creator_id = creator.verifying_key().to_string();
+        let mut domain = JynOperationDomain::new(SqliteStore::temporary().await);
+        let group_id = mint_group(&mut domain, &creator).await?;
+
+        let attachment = MediaAttachment {
+            blob_hash: "blob-1".into(),
+            kind: MediaKind::Photo,
+            byte_len: 4,
+            mime: "image/png".into(),
+            duration_ms: None,
+            waveform: None,
+            width: None,
+            height: None,
+            file_name: None,
+            blob_secret: None,
+        };
+        let old_copy = domain
+            .append_group_operation(
+                &creator,
+                Some(&group_id),
+                DomainOperation::PostPublished {
+                    profile_id: creator_id.clone(),
+                    post_id: "p-1".into(),
+                    body: "short-lived at first".into(),
+                    media: vec![attachment.clone()],
+                    visibility: Visibility::Public,
+                    expires_at: Some(9_000_000),
+                    created_at: 5,
+                    edited: false,
+                },
+            )
+            .await?;
+        // Promote to permanent: marker first (into the old bucket, while the
+        // old copy is still current), then the snapshot into its new bucket.
+        let marker = domain
+            .append_group_operation(
+                &creator,
+                Some(&group_id),
+                DomainOperation::PostRehomed {
+                    profile_id: creator_id.clone(),
+                    post_id: "p-1".into(),
+                    moved_at: 6,
+                },
+            )
+            .await?;
+        assert_eq!(marker.extensions.log_id, old_copy.extensions.log_id);
+        let snapshot = domain
+            .append_group_operation(
+                &creator,
+                Some(&group_id),
+                DomainOperation::PostPublished {
+                    profile_id: creator_id.clone(),
+                    post_id: "p-1".into(),
+                    body: "short-lived at first".into(),
+                    media: vec![attachment],
+                    visibility: Visibility::Public,
+                    expires_at: None,
+                    created_at: 5,
+                    edited: false,
+                },
+            )
+            .await?;
+        assert_ne!(snapshot.extensions.log_id, old_copy.extensions.log_id);
+
+        // The old bucket drains (its copy is disowned by the marker), but the
+        // blob is NOT reclaimed — the live snapshot still references it.
+        let freed = domain
+            .drop_drained_buckets(&group_id, &creator_id, FUTURE, &HashSet::new())
+            .await?;
+        assert!(!freed.blob_hashes.contains("blob-1"));
+        assert!(!freed.post_ids.contains("p-1"));
+
+        let remaining = domain.operations_for_group(&group_id).await?;
+        assert!(remaining.iter().any(|op| matches!(
+            &op.operation,
+            DomainOperation::PostPublished { post_id, expires_at: None, .. } if post_id == "p-1"
+        )));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn remote_genesis_routes_to_the_group_topic_without_a_body_decode() -> Result<()> {
+        // The author's side.
+        let creator = SigningKey::generate();
+        let creator_id = creator.verifying_key().to_string();
+        let mut author_domain = JynOperationDomain::new(SqliteStore::temporary().await);
+        let genesis = author_domain
+            .append_group_operation(
+                &creator,
+                None,
+                DomainOperation::GroupCreated {
+                    creator_profile_id: creator_id.clone(),
+                    name: "reading circle".into(),
+                    content_mode: GroupContentMode::Public,
+                    join_mode: GroupJoinMode::Open,
+                    discoverability: GroupDiscoverability::Listed,
+                    created_at: 10,
+                },
+            )
+            .await?;
+        let group_id = genesis.hash().to_string();
+        let replicated = author_domain
+            .operations_for_group_raw(&group_id)
+            .await?
+            .into_iter()
+            .next()
+            .expect("genesis stored");
+
+        // A recipient ingests the raw operation: the genesis sentinel in the
+        // header routes it onto the group topic derived from the op's hash.
+        let mut recipient = JynOperationDomain::new(SqliteStore::temporary().await);
+        recipient.ingest_remote_operation(replicated).await?;
+        let ops = recipient.operations_for_group(&group_id).await?;
+        assert_eq!(ops.len(), 1);
+        assert!(matches!(
+            ops[0].operation,
+            DomainOperation::GroupCreated { .. }
+        ));
         Ok(())
     }
 

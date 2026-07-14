@@ -31,6 +31,40 @@ class GhostCard {
           authorProfileId == other.authorProfileId;
 }
 
+/// A named discovery card from a friend's heart on a **public + listed**
+/// group post: "♥ Bob, in *Group X*" — a pointer into the group place, the
+/// post is not copied or moved (ADR-0009).
+class GroupDiscoveryCard {
+  final String carrierProfileId;
+  final String carrierDisplayName;
+  final String groupId;
+  final String groupName;
+
+  const GroupDiscoveryCard({
+    required this.carrierProfileId,
+    required this.carrierDisplayName,
+    required this.groupId,
+    required this.groupName,
+  });
+
+  @override
+  int get hashCode =>
+      carrierProfileId.hashCode ^
+      carrierDisplayName.hashCode ^
+      groupId.hashCode ^
+      groupName.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is GroupDiscoveryCard &&
+          runtimeType == other.runtimeType &&
+          carrierProfileId == other.carrierProfileId &&
+          carrierDisplayName == other.carrierDisplayName &&
+          groupId == other.groupId &&
+          groupName == other.groupName;
+}
+
 /// A comment under a river post, joined from the commenter's stream.
 class RiverComment {
   final String commenterProfileId;
