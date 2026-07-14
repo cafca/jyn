@@ -201,3 +201,34 @@ wire and at rest.
 - Backup media modes: full (default) / kept-only / metadata-only. Expired
   blobs are never archived; restore stages blob bytes and the next start
   re-imports and re-pins them from the restored records.
+
+## Deferred follow-ups
+
+- **Honest ephemerality statement in the UI.** Where post lifetimes/expiry
+  are explained, the app should state plainly that expiry removes the readable
+  content and media everywhere, and that the encrypted payload can be deleted
+  too; at most a small operation *header* (metadata — author, time, size,
+  hashes — no content) may remain. This keeps the user-facing promise honest —
+  no claim that the metadata trail is erased, but no overclaim that ciphertext
+  is stuck either. Descoped from the Phase 3 ephemerality-GC work (which deletes
+  recoverable content — media + decrypted plaintext); this is a copy/UI change
+  with no engine dependency and can land any time.
+- **Ciphertext-payload deletion — DONE (shipped after the first Phase 3 cut).**
+  Teardown now drops the encrypted payload as well as the media and decrypted
+  plaintext. `erase_post_content` calls the store's `delete_operation_payload`
+  on an expired or deleted post's content-bearing (`PostPublished`/`PostEdited`)
+  Spaces wrapper ops, and `operations_for_profile` skips body-less ops rather
+  than erroring, so reduction tolerates the header-only remnant. Chain-safe from
+  any position: the header (with `payload_hash`, backlink and signature) stays,
+  so backlink validation and sync are unaffected, and a body-less operation is a
+  modeled state. Tombstone/lifetime wrapper bodies are deliberately kept so
+  reduction still reflects delete/promote. Convergence rides on the per-device
+  drain: a re-synced op is a no-op (`ingest_operation` dedups by `has_operation`,
+  which matches by row regardless of body, so a deleted payload is never
+  re-materialized), and a fresh peer served a body-less op receives header-only
+  metadata (the LogSync wire format models `Body` as optional). What genuinely
+  cannot be removed mid-log is a *header* — metadata, not content. Confirmed
+  against p2panda-store / p2panda-core, 2026-07-13.
+- **Reshare-by-reference dedup** — only relevant once a reshare feature
+  exists; a reshare should point at the original ciphertext blob and re-wrap
+  its per-blob key rather than re-encrypting.

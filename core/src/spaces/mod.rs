@@ -42,8 +42,8 @@ use tracing::{debug, warn};
 use crate::domain::{
     ensure_spaces_tables, DomainExtensions, DomainOperation, JynOperationDomain, Visibility,
 };
-use forge::JynForge;
 pub use forge::SpacesOutbox;
+use forge::{JynForge, PlacementHint};
 pub use store::spaces_args_from_operation;
 pub(crate) use store::JynSpacesStore;
 
@@ -156,6 +156,10 @@ pub struct JynSpaces {
     my_space_id: SpaceId,
     my_circles_space_id: SpaceId,
     pending: Arc<Mutex<Vec<PendingMessage>>>,
+    /// Set right before `space.publish` (under `ops_lock`) so the forge places
+    /// the resulting encrypted application payload in its post's expiry bucket
+    /// (ADR-0016); the forge consumes it. See [`forge::PlacementHint`].
+    placement_hint: PlacementHint,
     /// Serializes all spaces operations. The manager's internal RwLock and
     /// the store's single sqlite connection interleave badly when several
     /// tasks (topic ingests, command handlers) drive the manager
@@ -191,11 +195,13 @@ impl JynSpaces {
         let domain = JynOperationDomain::new(store.clone());
         let spaces_store = JynSpacesStore::new(store);
         let outbox: SpacesOutbox = Arc::new(Mutex::new(Vec::new()));
+        let placement_hint: PlacementHint = Arc::new(Mutex::new(None));
         let forge = JynForge::new(
             domain.clone(),
             private_key,
             local_profile_id.clone(),
             outbox.clone(),
+            placement_hint.clone(),
         );
         let manager = Manager::new(spaces_store.clone(), forge, credentials, Rng::default())
             .map_err(|err| anyhow::anyhow!("failed to build spaces manager: {err}"))?;
@@ -209,6 +215,7 @@ impl JynSpaces {
             my_space_id,
             my_circles_space_id,
             pending: Arc::new(Mutex::new(Vec::new())),
+            placement_hint,
             ops_lock: Arc::new(tokio::sync::Mutex::new(())),
         })
     }
@@ -460,10 +467,30 @@ impl JynSpaces {
             .map_err(|err| anyhow::anyhow!("failed to load space: {err}"))?
             .context("encryption space does not exist locally")?;
         let plaintext = encode_cbor(inner).context("failed to encode inner operation")?;
-        let (space_y, message) = space
-            .publish(&plaintext)
+
+        // Park the placement for the wrapper the forge is about to build: the
+        // encrypted payload co-deletes with the post it carries, so it lands
+        // in that post's expiry bucket rather than the control log (ADR-0016).
+        // We hold `ops_lock` here, so no other publish can race the hint.
+        let log_id = self
+            .domain
+            .log_id_for(inner)
             .await
-            .map_err(|err| anyhow::anyhow!("failed to encrypt to space: {err}"))?;
+            .context("failed to resolve placement for encrypted payload")?;
+        *self
+            .placement_hint
+            .lock()
+            .expect("spaces placement hint lock poisoned") = Some(log_id);
+
+        let publish_result = space.publish(&plaintext).await;
+        // If the forge never ran (publish failed before forging), clear the
+        // hint so it can't mis-place an unrelated later payload.
+        *self
+            .placement_hint
+            .lock()
+            .expect("spaces placement hint lock poisoned") = None;
+        let (space_y, message) =
+            publish_result.map_err(|err| anyhow::anyhow!("failed to encrypt to space: {err}"))?;
         self.persist_states(None, Some(space_y)).await?;
 
         // Our own payload is stored decrypted right away (we authored it) and

@@ -17,3 +17,6 @@
 
 # Engineering skills: installed content is regenerable from skills-lock.json
 .agents/
+# Generated: symlinks into .agents/skills/ so Claude Code indexes the pinned skills
+# (created by the SessionStart hook in .claude/hooks/restore-skills.sh).
+.claude/skills/

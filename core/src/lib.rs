@@ -13,6 +13,7 @@ pub mod logging;
 pub mod media;
 pub mod node;
 pub mod notifications;
+pub mod placement;
 pub mod profile;
 pub(crate) mod profile_data;
 pub mod runtime;

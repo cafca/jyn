@@ -963,14 +963,33 @@ async fn default_handle_command(
             expires_at,
         } => {
             let sync = state.sync.lock().await;
+            // A lifetime change re-publishes the post as a self-contained
+            // snapshot (ADR-0016): the newest publication for a post id is
+            // its current state, so the group reducer picks up the new
+            // expiry without a dedicated lifetime op. Group logs are one
+            // co-deletion unit per group, so unlike profile posts there is
+            // no bucket move and no re-home marker.
+            let post = sync
+                .groups()
+                .group_view(&group_id)
+                .await?
+                .with_context(|| format!("unknown group {group_id}"))?
+                .posts
+                .into_iter()
+                .find(|post| post.post_id == post_id && post.profile_id == state.local_profile_id)
+                .with_context(|| format!("post {post_id} not found or not ours"))?;
             sync.groups()
                 .publish_to_group(
                     &group_id,
-                    DomainOperation::PostLifetimeChanged {
-                        profile_id: state.local_profile_id.clone(),
-                        post_id,
+                    DomainOperation::PostPublished {
+                        profile_id: post.profile_id,
+                        post_id: post.post_id,
+                        body: post.body,
+                        media: post.media,
+                        visibility: post.visibility,
                         expires_at,
-                        changed_at: now_unix_secs(),
+                        created_at: post.created_at,
+                        edited: post.edited,
                     },
                 )
                 .await?;
@@ -1193,6 +1212,7 @@ async fn publish_group_post(
                 visibility: Visibility::Public,
                 expires_at,
                 created_at: now,
+                edited: false,
             },
         )
         .await?;
@@ -1286,9 +1306,16 @@ async fn publish_interaction(
     post_id: &str,
     operation: DomainOperation,
 ) -> Result<()> {
+    // No visibility means the post is no longer in the author's reduced state:
+    // it expired and was torn down, or was deleted. Either way there's nothing
+    // left to react to — say so plainly rather than "unknown post".
     let visibility = post_visibility(state, post_author_profile_id, post_id)
         .await?
-        .with_context(|| format!("unknown post {post_id}; cannot react to it"))?;
+        .with_context(|| {
+            format!(
+                "that post has expired or was removed, so it can't be reacted to (post {post_id})"
+            )
+        })?;
     let mut sync = state.sync.lock().await;
     if visibility == Visibility::Public {
         sync.publish(operation).await
@@ -1320,6 +1347,72 @@ async fn unpin_and_prune_prefix(state: &RuntimeState, prefix: &str) {
     }
     if let Err(err) = state.node.blobs.pins().delete_prefix(prefix).await {
         tracing::warn!("failed to unpin under {prefix}: {err}");
+    }
+}
+
+/// Tears down an expired-or-deleted non-public post on this device: removes its
+/// `feed/` attachment pins (so unreferenced blobs lose their GC root and their
+/// materialized plaintext cache files are pruned) and erases the post's content
+/// — both the locally-cached decrypted body and the encrypted payload of the
+/// stored operation — so neither the readable text nor its ciphertext can be
+/// recovered from disk; only header-only metadata remains. Built once and reused by
+/// both explicit delete and expiry drain. Kept copies survive untouched — their
+/// pins live under a separate `keep/…` namespace, so a blob shared with a keep
+/// is reclaimed only when the last referencing pin is gone. Idempotent and
+/// best-effort: re-running it on an already-torn-down post is a no-op, and blob
+/// teardown never fails the user action that triggered it.
+async fn teardown_feed_presence(state: &RuntimeState, post_id: &str) {
+    unpin_and_prune_prefix(state, &format!("feed/{post_id}/")).await;
+    let sync = state.sync.lock().await;
+    if let Err(err) = sync
+        .erase_post_content(&state.local_profile_id, post_id)
+        .await
+    {
+        tracing::warn!("failed to erase post content for {post_id}: {err}");
+    }
+}
+
+/// Recipient-side teardown of an expired non-public post received from a friend
+/// or friend-of-friend, so expired content leaves this device (and the network)
+/// too, not just the author's. For each attachment it prunes the materialized
+/// plaintext cache file and stops serving the ciphertext blob to other peers; a
+/// recipient never pins fetched blobs, so the ciphertext is already GC-eligible
+/// on this device — this just makes us stop being a source before the sweep. It
+/// also erases the post's content — the decrypted body and the encrypted payload
+/// of the stored operation — so neither the readable text nor its ciphertext can
+/// be recovered from disk. A copy the recipient explicitly KEPT is untouched: its blobs stay held
+/// under the recipient's own `keep/…` pins and its text lives in the keep
+/// snapshot, both independent of this teardown (a kept blob re-exports from the
+/// store on next view, and its per-blob secret comes from the keep snapshot).
+/// Idempotent and best-effort.
+async fn teardown_received_post(
+    state: &RuntimeState,
+    author_profile_id: &str,
+    post: &crate::domain::ReducedPost,
+    kept_hashes: &std::collections::HashSet<String>,
+) {
+    for attachment in &post.media {
+        // A blob we still hold via one of our own keeps is left entirely alone:
+        // its lifecycle (including whether we serve it) is governed by the keep,
+        // not by the original post's expiry. Blocking it here would also be
+        // irreversible — nothing ever unblocks a hash.
+        if kept_hashes.contains(&attachment.blob_hash) {
+            continue;
+        }
+        crate::media::prune_cached(&state.media_cache_dir, &attachment.blob_hash);
+        if let Ok(hash) = attachment.blob_hash.parse::<p2panda_blobs::Hash>() {
+            state.node.blobs.block_serving_hashes([hash]);
+        }
+    }
+    let sync = state.sync.lock().await;
+    if let Err(err) = sync
+        .erase_post_content(author_profile_id, &post.post_id)
+        .await
+    {
+        tracing::warn!(
+            "failed to erase content for received post {}: {err}",
+            post.post_id
+        );
     }
 }
 
@@ -1525,16 +1618,20 @@ async fn find_blob_secret(state: &RuntimeState, blob_hash: &str) -> Result<Optio
     };
 
     let sync = state.sync.lock().await;
-    let local_state = sync.read_profile_state(&state.local_profile_id).await?;
-    if let Some(local) = &local_state {
+    if let Some(local) = sync.read_profile_state(&state.local_profile_id).await? {
         if let Some(secret) = secret_in(&local.posts) {
             return Ok(Some(secret));
         }
-        for contact_id in &local.followed_profile_ids {
-            if let Some(contact) = sync.read_profile_state(contact_id).await? {
-                if let Some(secret) = secret_in(&contact.posts) {
-                    return Ok(Some(secret));
-                }
+    }
+    // Search every profile we receive posts from — direct friends *and*
+    // friends-of-friends. A Circles post reaches a friend-of-friend, whose
+    // author is not in our own follow list, so restricting to followed
+    // profiles would fail to find the per-blob secret and leave the fetched
+    // ciphertext undecrypted in the cache.
+    for contact_id in sync.contact_profile_ids().await? {
+        if let Some(contact) = sync.read_profile_state(&contact_id).await? {
+            if let Some(secret) = secret_in(&contact.posts) {
+                return Ok(Some(secret));
             }
         }
     }
@@ -1949,6 +2046,7 @@ async fn publish_post(
         visibility: draft.visibility,
         expires_at,
         created_at: now,
+        edited: false,
     };
     let mut sync = state.sync.lock().await;
     if draft.visibility == Visibility::Public {
@@ -2081,9 +2179,14 @@ async fn edit_post(
     let visibility = if is_private {
         Visibility::Private
     } else {
-        post_visibility(state, &state.local_profile_id, &post_id)
-            .await?
-            .unwrap_or(Visibility::Public)
+        match post_visibility(state, &state.local_profile_id, &post_id).await? {
+            Some(visibility) => visibility,
+            // Post already gone from our reduced state (deleted, or expired and
+            // torn down). Editing a post that no longer exists is a no-op — and
+            // must not fall back to importing plaintext blobs / publishing a
+            // plaintext edit for what was an encrypted post.
+            None => return Ok(()),
+        }
     };
 
     let mut media = kept_media;
@@ -2143,9 +2246,14 @@ async fn delete_post(
         return Ok(());
     }
 
-    let visibility = post_visibility(state, &state.local_profile_id, &post_id)
-        .await?
-        .unwrap_or(Visibility::Public);
+    let Some(visibility) = post_visibility(state, &state.local_profile_id, &post_id).await? else {
+        // The post is already gone from our own reduced state — deleted, or
+        // expired and torn down (teardown purges its decrypted row). There is
+        // nothing left to tombstone, and we must NOT fall back to a plaintext
+        // publish: doing so would broadcast a `PostDeleted` for what was an
+        // encrypted post. Its pins were already reclaimed when it went.
+        return Ok(());
+    };
     let operation = DomainOperation::PostDeleted {
         profile_id: state.local_profile_id.clone(),
         post_id: post_id.clone(),
@@ -2159,7 +2267,14 @@ async fn delete_post(
             .await?;
     }
     drop(sync);
-    unpin_and_prune_prefix(state, &format!("feed/{post_id}/")).await;
+    // Public posts are plaintext by design: only reclaim their pins. Non-public
+    // posts additionally purge their decrypted body so delete converges on the
+    // same "nothing readable left on disk" end state as expiry.
+    if visibility == Visibility::Public {
+        unpin_and_prune_prefix(state, &format!("feed/{post_id}/")).await;
+    } else {
+        teardown_feed_presence(state, &post_id).await;
+    }
     Ok(())
 }
 
@@ -2178,22 +2293,66 @@ async fn set_post_lifetime(
         return Ok(());
     }
 
-    let visibility = post_visibility(state, &state.local_profile_id, &post_id)
-        .await?
-        .unwrap_or(Visibility::Public);
-    let operation = DomainOperation::PostLifetimeChanged {
+    // Changing a lifetime changes a post's bucket, so we re-home it (ADR-0016):
+    // publish a self-contained snapshot of its current state into the new
+    // bucket and disown the old copy with a re-home marker. Reduction dedupes
+    // by post id (newest ordering wins), so the snapshot supersedes every
+    // earlier copy while GC can later drop the old bucket cleanly.
+    let Some(post) = current_local_post(state, &post_id).await? else {
+        // Post already gone from our reduced state (deleted, or expired and
+        // torn down). Nothing to re-home, and a plaintext fallback publish
+        // would leak an op for what was an encrypted post.
+        return Ok(());
+    };
+    if post.expires_at == expires_at {
+        return Ok(());
+    }
+    let now = now_unix_secs();
+    let visibility = post.visibility;
+    let rehomed = DomainOperation::PostRehomed {
+        profile_id: state.local_profile_id.clone(),
+        post_id: post_id.clone(),
+        moved_at: now,
+    };
+    let snapshot = DomainOperation::PostPublished {
         profile_id: state.local_profile_id.clone(),
         post_id,
+        body: post.body,
+        media: post.media,
+        visibility,
         expires_at,
-        changed_at: now_unix_secs(),
+        created_at: post.created_at,
+        edited: post.edited,
     };
+
     let mut sync = state.sync.lock().await;
     if visibility == Visibility::Public {
-        sync.publish(operation).await
+        // Marker first, while the old copy is still the post's current one, so
+        // it is placed into the old bucket; then the snapshot into the new one.
+        sync.publish(rehomed).await?;
+        sync.publish(snapshot).await
     } else {
-        sync.publish_encrypted(operation, space_kind_for(visibility))
+        sync.publish_encrypted(rehomed, space_kind_for(visibility))
+            .await?;
+        sync.publish_encrypted(snapshot, space_kind_for(visibility))
             .await
     }
+}
+
+/// The author's own current copy of a post from reduced state, or `None` if
+/// it is no longer present (deleted, or expired and torn down).
+async fn current_local_post(
+    state: &RuntimeState,
+    post_id: &str,
+) -> Result<Option<crate::domain::ReducedPost>> {
+    let sync = state.sync.lock().await;
+    let own_state = sync.read_profile_state(&state.local_profile_id).await?;
+    Ok(own_state.and_then(|reduced| {
+        reduced
+            .posts
+            .into_iter()
+            .find(|post| post.post_id == post_id)
+    }))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2240,6 +2399,29 @@ async fn update_profile(
 
 async fn drain_expired(state: &RuntimeState, event_tx: &Sender<NetworkEvent>) -> Result<()> {
     let now = now_unix_secs();
+
+    // GC's dead-post set, captured *before* teardown erases expired posts from
+    // reduced state (ADR-0016): the pairs whose posts are tombstoned or expired
+    // across everyone we know. Reaction reaping and bucket dropping both key off
+    // this, so it must reflect posts that are about to be torn down this pass.
+    let gc_profiles: Vec<String> = {
+        let sync = state.sync.lock().await;
+        let mut profiles = vec![state.local_profile_id.clone()];
+        profiles.extend(sync.contact_profile_ids().await.unwrap_or_default());
+        profiles.sort();
+        profiles.dedup();
+        profiles
+    };
+    let dead_targets = {
+        let sync = state.sync.lock().await;
+        sync.dead_post_targets(&gc_profiles, now)
+            .await
+            .unwrap_or_else(|err| {
+                tracing::warn!("failed to compute GC dead-post set: {err:#}");
+                Default::default()
+            })
+    };
+
     let drained = state.private_posts.drain_expired(now)?;
     if !drained.is_empty() {
         for post in &drained {
@@ -2250,6 +2432,80 @@ async fn drain_expired(state: &RuntimeState, event_tx: &Sender<NetworkEvent>) ->
                 posts: state.private_posts.list()?,
             })
             .context("failed to send PrivatePostsUpdated event")?;
+    }
+
+    // Tear down the author's own *replicated* non-public posts that have
+    // expired. Reduction and read-time filtering already hide them; this is the
+    // side-effect that actually reclaims their media and purges their decrypted
+    // text. Public posts (plaintext by design) and permanent posts are left
+    // untouched. Running on startup too (via `recover_startup`) gives offline
+    // convergence: a device that missed the expiry catches up on next launch.
+    // Best-effort like the keep-lease block below: a read failure here must not
+    // abort the whole drain and skip keep enforcement.
+    let expired_own: Vec<String> = {
+        let sync = state.sync.lock().await;
+        match sync.read_profile_state(&state.local_profile_id).await {
+            Ok(Some(own)) => own
+                .posts
+                .iter()
+                .filter(|post| post.is_expired(now) && post.visibility != Visibility::Public)
+                .map(|post| post.post_id.clone())
+                .collect(),
+            Ok(None) => Vec::new(),
+            Err(err) => {
+                tracing::warn!("failed to read local state for expiry teardown: {err:#}");
+                Vec::new()
+            }
+        }
+    };
+    for post_id in &expired_own {
+        teardown_feed_presence(state, post_id).await;
+    }
+
+    // Recipient side: tear down expired non-public posts we received from
+    // friends and friends-of-friends, so expired content leaves this device
+    // and stops being served — the piece that makes expiry reach the whole
+    // network, not just the author. Best-effort per contact.
+    let contacts = {
+        let sync = state.sync.lock().await;
+        sync.contact_profile_ids().await.unwrap_or_else(|err| {
+            tracing::warn!("failed to list contacts for recipient teardown: {err:#}");
+            Vec::new()
+        })
+    };
+    // Blobs we hold under our own keeps must survive a received-post teardown;
+    // collect their hashes once so the teardown can skip them.
+    let kept_hashes: std::collections::HashSet<String> = state
+        .keeps
+        .list()
+        .unwrap_or_default()
+        .into_iter()
+        .flat_map(|keep| {
+            keep.snapshot
+                .media
+                .into_iter()
+                .map(|attachment| attachment.blob_hash)
+        })
+        .collect();
+    for contact_id in &contacts {
+        let expired_received: Vec<crate::domain::ReducedPost> = {
+            let sync = state.sync.lock().await;
+            match sync.read_profile_state(contact_id).await {
+                Ok(Some(contact)) => contact
+                    .posts
+                    .into_iter()
+                    .filter(|post| post.is_expired(now) && post.visibility != Visibility::Public)
+                    .collect(),
+                Ok(None) => Vec::new(),
+                Err(err) => {
+                    tracing::warn!("failed to read {contact_id} for recipient teardown: {err:#}");
+                    Vec::new()
+                }
+            }
+        };
+        for post in &expired_received {
+            teardown_received_post(state, contact_id, post, &kept_hashes).await;
+        }
     }
 
     // Enforce keep leases: a keep dies with its snapshot's lifetime and with
@@ -2280,7 +2536,58 @@ async fn drain_expired(state: &RuntimeState, event_tx: &Sender<NetworkEvent>) ->
             emit_keeps(state, event_tx)?;
         }
     }
+
+    // GC of the co-deletion structure (ADR-0016), after per-post teardown:
+    // (1) reap reactions whose target post is dead — on our own topic and each
+    //     contact's, so both our reactions and received ones leave with the
+    //     post they were on, even though they live in their own month buckets;
+    // (2) drop fully-drained bucket logs whole — prune their operations and
+    //     un-announce them so expired buckets stop syncing — then reclaim the
+    //     pins and cache of anything they freed. Runs on the same drain path as
+    //     everything else, so an offline device converges on next start.
+    for holder in &gc_profiles {
+        let reaped = {
+            let sync = state.sync.lock().await;
+            sync.reap_reactions_for_dead_targets(holder, &dead_targets)
+                .await
+        };
+        if let Err(err) = reaped {
+            tracing::warn!("failed to reap reactions on {holder}: {err:#}");
+        }
+    }
+
+    for topic_profile_id in &gc_profiles {
+        let freed = {
+            let sync = state.sync.lock().await;
+            sync.drop_drained_buckets(topic_profile_id, now, &dead_targets)
+                .await
+        };
+        match freed {
+            Ok(freed) => reclaim_dropped_content(state, freed).await,
+            Err(err) => {
+                tracing::warn!("failed to drop drained buckets on {topic_profile_id}: {err:#}")
+            }
+        }
+    }
+
     Ok(())
+}
+
+/// Reclaims the blob pins and materialized cache of content whose bucket log GC
+/// just dropped: unpins each freed post's `feed/…` namespace, and prunes the
+/// cache of every freed blob and stops serving it (so a recipient's dropped
+/// ciphertext leaves this device too). A blob still held by a keep survives —
+/// its pin lives under a separate `keep/…` namespace. Best-effort.
+async fn reclaim_dropped_content(state: &RuntimeState, freed: crate::domain::DrainedContent) {
+    for post_id in &freed.post_ids {
+        unpin_and_prune_prefix(state, &format!("feed/{post_id}/")).await;
+    }
+    for blob_hash in &freed.blob_hashes {
+        crate::media::prune_cached(&state.media_cache_dir, blob_hash);
+        if let Ok(hash) = blob_hash.parse::<p2panda_blobs::Hash>() {
+            state.node.blobs.block_serving_hashes([hash]);
+        }
+    }
 }
 
 async fn collect_diagnostics_snapshot(state: &RuntimeState) -> Result<DiagnosticsSnapshot> {

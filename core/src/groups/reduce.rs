@@ -396,6 +396,7 @@ fn reduce_group_operations(
                 visibility,
                 expires_at,
                 created_at,
+                edited,
             } => {
                 // Posting is governed by membership (`Write`), and a post
                 // must be signed by the author it claims.
@@ -409,6 +410,9 @@ fn reduce_group_operations(
                     continue;
                 }
                 latest_activity_at = latest_activity_at.max(*created_at);
+                // A later publication for the same post id is a snapshot
+                // (ADR-0016): a lifetime change re-publishes the post's
+                // complete state, so inserting over the old copy is exact.
                 posts.insert(
                     post_id.clone(),
                     ReducedPost {
@@ -419,7 +423,7 @@ fn reduce_group_operations(
                         visibility: *visibility,
                         expires_at: *expires_at,
                         created_at: *created_at,
-                        edited: false,
+                        edited: *edited,
                     },
                 );
             }
@@ -443,21 +447,6 @@ fn reduce_group_operations(
                             post.media = media.clone();
                         }
                         post.edited = true;
-                    }
-                }
-            }
-            DomainOperation::PostLifetimeChanged {
-                profile_id,
-                post_id,
-                expires_at,
-                ..
-            } => {
-                if author_id != *profile_id {
-                    continue;
-                }
-                if let Some(post) = posts.get_mut(post_id) {
-                    if post.profile_id == author_id {
-                        post.expires_at = *expires_at;
                     }
                 }
             }
@@ -617,11 +606,9 @@ mod tests {
         let owner_key = SigningKey::generate();
         let owner_id = owner_key.verifying_key().to_string();
         let mut domain = JynOperationDomain::new(SqliteStore::temporary().await);
-        let genesis_context = format!("{}test", crate::domain::GROUP_GENESIS_CONTEXT_PREFIX);
         let header = domain
             .append_group_operation(
                 &owner_key,
-                &genesis_context,
                 None,
                 DomainOperation::GroupCreated {
                     creator_profile_id: owner_id.clone(),
@@ -658,7 +645,6 @@ mod tests {
             self.domain
                 .append_group_operation(
                     key,
-                    &group_id,
                     Some(&group_id),
                     DomainOperation::GroupGoverned {
                         group_id: group_id.clone(),
@@ -693,7 +679,6 @@ mod tests {
             self.domain
                 .append_group_operation(
                     key,
-                    &group_id,
                     Some(&group_id),
                     DomainOperation::PostPublished {
                         profile_id: key.verifying_key().to_string(),
@@ -703,6 +688,7 @@ mod tests {
                         visibility: Visibility::Public,
                         expires_at: None,
                         created_at: at,
+                        edited: false,
                     },
                 )
                 .await?;
@@ -741,11 +727,9 @@ mod tests {
         let attacker_key = SigningKey::generate();
         let victim_id = SigningKey::generate().verifying_key().to_string();
         let mut domain = JynOperationDomain::new(SqliteStore::temporary().await);
-        let genesis_context = format!("{}forged", crate::domain::GROUP_GENESIS_CONTEXT_PREFIX);
         let header = domain
             .append_group_operation(
                 &attacker_key,
-                &genesis_context,
                 None,
                 DomainOperation::GroupCreated {
                     creator_profile_id: victim_id,
@@ -774,7 +758,6 @@ mod tests {
             .domain
             .append_group_operation(
                 &joiner_key,
-                &group_id,
                 Some(&group_id),
                 DomainOperation::GroupJoinRequested {
                     group_id: group_id.clone(),
@@ -875,7 +858,6 @@ mod tests {
             .domain
             .append_group_operation(
                 &owner_key,
-                &group_id,
                 Some(&group_id),
                 DomainOperation::PostDeleted {
                     profile_id: fixture.owner_id.clone(),
@@ -891,7 +873,6 @@ mod tests {
             .domain
             .append_group_operation(
                 &member_key,
-                &group_id,
                 Some(&group_id),
                 DomainOperation::PostDeleted {
                     profile_id: member_id.clone(),
@@ -926,7 +907,6 @@ mod tests {
             .domain
             .append_group_operation(
                 &attacker_key,
-                &group_id,
                 Some(&group_id),
                 DomainOperation::PostDeleted {
                     profile_id: attacker_id.clone(),
@@ -951,7 +931,6 @@ mod tests {
             .domain
             .append_group_operation(
                 &attacker_key,
-                &group_id,
                 Some(&group_id),
                 DomainOperation::PostDeleted {
                     profile_id: attacker_id.clone(),
@@ -1034,7 +1013,6 @@ mod tests {
             .domain
             .append_group_operation(
                 &owner_key,
-                &group_id,
                 Some(&group_id),
                 DomainOperation::GroupLeft {
                     group_id: group_id.clone(),
@@ -1093,7 +1071,6 @@ mod tests {
             .domain
             .append_group_operation(
                 &owner_key,
-                &group_id,
                 Some(&group_id),
                 DomainOperation::GroupLeft {
                     group_id: group_id.clone(),
@@ -1176,18 +1153,12 @@ mod tests {
             };
         fixture
             .domain
-            .append_group_operation(
-                &member_key,
-                &group_id,
-                Some(&group_id),
-                comment(&member_id, "c-1", 30),
-            )
+            .append_group_operation(&member_key, Some(&group_id), comment(&member_id, "c-1", 30))
             .await?;
         fixture
             .domain
             .append_group_operation(
                 &stranger_key,
-                &group_id,
                 Some(&group_id),
                 comment(&stranger_id, "c-2", 31),
             )
@@ -1204,15 +1175,15 @@ mod tests {
         };
         fixture
             .domain
-            .append_group_operation(&member_key, &group_id, Some(&group_id), heart(true, 40))
+            .append_group_operation(&member_key, Some(&group_id), heart(true, 40))
             .await?;
         fixture
             .domain
-            .append_group_operation(&member_key, &group_id, Some(&group_id), heart(false, 41))
+            .append_group_operation(&member_key, Some(&group_id), heart(false, 41))
             .await?;
         fixture
             .domain
-            .append_group_operation(&member_key, &group_id, Some(&group_id), heart(true, 42))
+            .append_group_operation(&member_key, Some(&group_id), heart(true, 42))
             .await?;
 
         let state = fixture.state().await?;
@@ -1246,7 +1217,6 @@ mod tests {
             .domain
             .append_group_operation(
                 &member_key,
-                &group_id,
                 Some(&group_id),
                 DomainOperation::GroupLeft {
                     group_id: group_id.clone(),

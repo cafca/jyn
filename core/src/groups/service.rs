@@ -39,7 +39,6 @@ use super::{
 };
 use crate::domain::{
     ensure_spaces_tables, DomainExtensions, DomainOperation, JynOperationDomain, ReducedPost,
-    GROUP_GENESIS_CONTEXT_PREFIX,
 };
 use crate::spaces::{spaces_args_from_operation, JynSpacesStore, GLOBAL_GROUPS_CONTEXT_ID};
 
@@ -223,7 +222,7 @@ impl Forge<()> for GroupsForge {
 
         let mut domain = self.domain.clone();
         let header = domain
-            .append_group_operation(&self.private_key, &group_id, Some(&group_id), operation)
+            .append_group_operation(&self.private_key, Some(&group_id), operation)
             .await
             .map_err(|err| GroupsForgeError(format!("append operation: {err:#}")))?;
 
@@ -360,14 +359,11 @@ impl JynGroups {
         anyhow::ensure!(!name.trim().is_empty(), "a group needs a name");
         let _guard = self.ops_lock.lock().await;
 
-        // The genesis op mints the GroupId (its own hash), so it lives on a
-        // one-op log under a unique context (see `append_group_operation`).
-        let genesis_context = format!(
-            "{GROUP_GENESIS_CONTEXT_PREFIX}{}",
-            unique_suffix(&self.local_profile_id)
-        );
         // Build the genesis op once: the same value is signed onto the log
         // and encoded for the live-gossip body, so the two can never diverge.
+        // The genesis mints the GroupId (its own hash); the domain layer
+        // allocates its per-group log and binds it to the id after signing
+        // (see `append_group_operation`).
         let genesis_op = DomainOperation::GroupCreated {
             creator_profile_id: self.local_profile_id.clone(),
             name: name.trim().to_owned(),
@@ -378,12 +374,7 @@ impl JynGroups {
         };
         let mut domain = self.domain.clone();
         let header = domain
-            .append_group_operation(
-                &self.private_key,
-                &genesis_context,
-                None,
-                genesis_op.clone(),
-            )
+            .append_group_operation(&self.private_key, None, genesis_op.clone())
             .await?;
         let group_id = header.hash().to_string();
         let genesis = Operation {
@@ -850,7 +841,9 @@ impl JynGroups {
         let Some(args) = spaces_args_from_operation::<()>(operation) else {
             return Ok(GroupsIngestReport::default());
         };
-        let group_id = operation.header.extensions.log_id.profile_id.clone();
+        // The audience names the group: control messages are never genesis
+        // ops, so the genesis sentinel can't reach this path.
+        let group_id = operation.header.extensions.audience.clone();
         let _guard = self.ops_lock.lock().await;
         self.register_group(&group_id, None).await?;
         if let SpacesArgs::Auth {
@@ -931,12 +924,7 @@ impl JynGroups {
     async fn append_group_op(&self, group_id: &str, operation: DomainOperation) -> Result<()> {
         let mut domain = self.domain.clone();
         let header = domain
-            .append_group_operation(
-                &self.private_key,
-                group_id,
-                Some(group_id),
-                operation.clone(),
-            )
+            .append_group_operation(&self.private_key, Some(group_id), operation.clone())
             .await?;
         let body = p2panda_core::Body::from(encode_cbor(&operation)?);
         self.push_outbox(
@@ -1505,20 +1493,6 @@ pub fn viewer_filtered(
     }
 }
 
-/// A unique log-context suffix for genesis ops: hash of author, wall clock,
-/// and a process-wide counter.
-fn unique_suffix(profile_id: &str) -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let count = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_nanos())
-        .unwrap_or(0);
-    let seed = format!("{profile_id}/{nanos}/{count}");
-    Hash::digest(seed.as_bytes()).to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use anyhow::Result;
@@ -1612,7 +1586,6 @@ mod tests {
         domain
             .append_group_operation(
                 &joiner_key,
-                &group_id,
                 Some(&group_id),
                 DomainOperation::GroupJoinRequested {
                     group_id: group_id.clone(),
@@ -1670,7 +1643,6 @@ mod tests {
         domain
             .append_group_operation(
                 &joiner_key,
-                &group_id,
                 Some(&group_id),
                 DomainOperation::GroupJoinRequested {
                     group_id: group_id.clone(),
