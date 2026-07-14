@@ -45,7 +45,7 @@ const _updateFeedUrl = 'https://cafca.github.io/jyn/appcast.xml';
 
 /// Bridges the native "Check for Updates…" menu item (see MainFlutterWindow)
 /// to the Dart-side updater.
-const _updaterChannel = MethodChannel('land.jyn.jyn/updater');
+const _updaterChannel = MethodChannel('app.jyn.jyn/updater');
 
 /// Wires up automatic (on-launch + daily) update checks and the manual menu
 /// item. Only macOS ships an updater today; other desktops arrive with their

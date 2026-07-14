@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+    <id>app.jyn.jyn</id>
+    <metadata_license>CC0-1.0</metadata_license>
+    <name>jyn</name>
+    <summary>A small, private river shared between friends</summary>
+    <description>
+        <p>
+            jyn is a peer-to-peer app for a circle of friends: post to a shared
+            river, read what your friends post, record and play voice notes, and
+            watch videos. There is no server — peers sync directly over the local
+            network and the internet.
+        </p>
+    </description>
+    <!-- flutter_distributor names the desktop entry after the binary (jyn),
+         so the launchable/provides id is jyn.desktop, not the component id. -->
+    <launchable type="desktop-id">jyn.desktop</launchable>
+    <url type="homepage">https://jyn.app</url>
+    <provides>
+        <id>jyn.desktop</id>
+    </provides>
+    <content_rating type="oars-1.0" />
+</component>

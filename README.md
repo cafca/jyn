@@ -15,7 +15,7 @@ survive).
 - `core/` — the Rust core: p2panda node, sync, stores, domain logic, and the
   headless runtime that derives UI state. Compiled into the app as a static
   library via [flutter_rust_bridge](https://github.com/fzyzcjy/flutter_rust_bridge).
-- `app/` — the Flutter app (macOS first; iOS next; Windows/Linux/Android
+- `app/` — the Flutter app (macOS and Linux desktop; iOS next; Windows/Android
   planned). Talks to the core through generated bindings: user actions are
   awaitable calls, state arrives as one event stream.
 
@@ -49,8 +49,19 @@ daily, and offers an "Check for Updates…" item in the app menu. Releases are
 cut locally with `scripts/release.sh` (build → notarize → EdDSA-sign →
 appcast → GitHub Release), driven by the repo-root `VERSION` file. See
 [docs/2026-07-05-auto-updater.md](docs/2026-07-05-auto-updater.md) for the
-one-time signing setup and the release runbook. iOS/Android update through
-their app stores; Linux/Windows backends come with those ports.
+one-time signing setup and the release runbook.
+
+Linux ships as a self-contained **AppImage** and a **`.deb`**, built in CI
+rather than locally (`flutter build linux` needs a Linux host). Pushing the
+`v<version>` tag that `release.sh` creates triggers the `linux-release`
+workflow, which builds both artifacts with `flutter_distributor` — keyed to the
+same `VERSION` — and attaches them to the same GitHub Release. Linux has no
+auto-update; updates are a manual re-download. Packaging config lives in
+`app/distribute_options.yaml` and `app/linux/packaging/`; see
+[docs/adr/0019-linux-appimage-and-deb-via-flutter-distributor.md](docs/adr/0019-linux-appimage-and-deb-via-flutter-distributor.md).
+
+iOS/Android update through their app stores; the Windows backend comes with
+that port.
 
 ## What it does
 

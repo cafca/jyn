@@ -109,3 +109,48 @@ jobs:
       - name: Fail on drift
         working-directory: app
         run: git diff --exit-code -- lib/src/rust
+
+  # Bundle-id guard (ADR 0020): the old application id must not survive anywhere
+  # in the tree outside the docs that record the migration.
+  bundle-id:
+    name: bundle id
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check bundle id
+        run: scripts/check_bundle_id.sh
+
+  # Linux regression gate (ADR 0019): build the Linux target and smoke-test the
+  # result under a virtual display, so a change that breaks Linux is caught
+  # before merge. Debug build mirrors the macOS job — faster, and it exercises
+  # the same core link + libmpv load + GTK init the release build does.
+  build-linux:
+    name: build & smoke (Linux)
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux build deps
+        run: |
+          sudo apt-get update
+          # libmpv-dev: media_kit's video plugin links against libmpv via
+          # pkg-config (ADR 0018), so it must be present to build and run.
+          sudo apt-get install -y \
+            clang cmake ninja-build pkg-config libgtk-3-dev libmpv-dev xvfb
+      # cargokit compiles the core during `flutter build`, so the host needs a
+      # Rust toolchain too.
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: Resolve packages
+        run: flutter pub get
+      - name: Build (debug)
+        run: flutter build linux --debug
+      - name: Smoke test
+        run: tool/linux_smoke_test.sh build/linux/x64/debug/bundle/jyn

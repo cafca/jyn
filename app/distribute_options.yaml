@@ -1,0 +1,23 @@
+# flutter_distributor / fastforge configuration (ADR 0019).
+#
+# Linux is built in CI on ubuntu-22.04 and produces two artifacts attached to
+# the GitHub Release: a self-contained AppImage (bundles GTK + libmpv, no
+# sandbox) and a .deb (declares its runtime deps). The version comes from
+# pubspec — the release workflow syncs it from the shared VERSION file first,
+# so a Linux release stays coherent with the macOS one.
+#
+#   flutter_distributor release --name linux
+#
+# Per-target packaging lives under linux/packaging/<target>/make_config.yaml.
+output: dist/
+releases:
+  - name: linux
+    jobs:
+      - name: linux-appimage
+        package:
+          platform: linux
+          target: appimage
+      - name: linux-deb
+        package:
+          platform: linux
+          target: deb
