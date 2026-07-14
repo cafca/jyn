@@ -86,7 +86,9 @@ void main() {
     expect(fake.calls.last, 'play');
   });
 
-  testWidgets('tapping the waveform centre seeks to the middle', (tester) async {
+  testWidgets('tapping the waveform centre seeks to the middle', (
+    tester,
+  ) async {
     final fake = FakePlayback();
     await pumpPlayer(tester, path: '/tmp/note.wav', factory: () => fake);
 
