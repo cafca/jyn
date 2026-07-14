@@ -6,18 +6,12 @@
     <description>Updates for jyn.</description>
     <language>en</language>
     <item>
-      <title>0.2.0</title>
-      <pubDate>Sun, 12 Jul 2026 13:30:41 +0000</pubDate>
-      <sparkle:version>20</sparkle:version>
-      <sparkle:shortVersionString>0.2.0</sparkle:shortVersionString>
+      <title>0.3.0</title>
+      <pubDate>Tue, 14 Jul 2026 18:27:53 +0000</pubDate>
+      <sparkle:version>35</sparkle:version>
+      <sparkle:shortVersionString>0.3.0</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>11.0</sparkle:minimumSystemVersion>
-      <description><![CDATA[<h2>0.2.0</h2>
-<ul>
-  <li>Non-public posts are now end-to-end encrypted: only the audience you pick (a Circle, or your friend-of-friend graph) can read them, including any photos or video attached.</li>
-  <li>Backups now carry attached media, not just post data.</li>
-  <li>Dependency and packaging maintenance: updated p2panda, patched a transitive RUSTSEC advisory, and cleaned up stray licensing files.</li>
-</ul>]]></description>
-      <enclosure url="https://github.com/cafca/jyn/releases/download/v0.2.0/jyn-0.2.0.zip" sparkle:edSignature="wJa3Zzs5iMowRl3YquV1axt018asT3ovseA/nZlUOTwhEDahg+FvAyCC+llSQm1JIobePORrjBR0GML69ENnBg==" length="63043292" type="application/octet-stream" />
+      <enclosure url="https://github.com/cafca/jyn/releases/download/v0.3.0/jyn-0.3.0.zip" sparkle:edSignature="Ww0CSV6p79wc+hzZ3CjUQjYLPjtF4+hhj4RbYlWxoZ0I7CoStS8mRcnbtpDRlfwL/kda/M7xfmsxdQca7WHZDw==" length="81530211" type="application/octet-stream" />
     </item>
   </channel>
 </rss>
