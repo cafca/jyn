@@ -1,4 +1,4 @@
-package land.jyn.jyn
+package app.jyn.jyn
 
 import io.flutter.embedding.android.FlutterActivity
 

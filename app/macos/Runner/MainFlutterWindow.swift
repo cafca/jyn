@@ -39,7 +39,7 @@ class MainFlutterWindow: NSWindow {
     RegisterGeneratedPlugins(registry: flutterViewController)
 
     updaterChannel = FlutterMethodChannel(
-      name: "land.jyn.jyn/updater",
+      name: "app.jyn.jyn/updater",
       binaryMessenger: flutterViewController.engine.binaryMessenger)
     installCheckForUpdatesMenuItem()
 

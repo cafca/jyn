@@ -1,0 +1,55 @@
+# .deb packaging (ADR 0019): installs through apt and integrates like a native
+# app. Built on ubuntu-22.04, so the glibc floor is 2.35 (current LTS / Debian
+# stable). The icon and desktop entry reuse the macOS app icon.
+display_name: jyn
+package_name: jyn
+
+maintainer:
+  name: jyn
+  email: hi@jyn.app
+
+# https://www.debian.org/doc/debian-policy/ch-archive.html#s-priorities
+priority: optional
+
+# A peer-to-peer social client — the network section fits best.
+# https://www.debian.org/doc/debian-policy/ch-archive.html#s-subsections
+section: net
+
+# Approximate on-disk size in kilobytes, reported in the control file's
+# Installed-Size (informational; apt shows it). Roughly the Flutter release
+# bundle — libmpv is a system dependency here, not bundled. Required field.
+installed_size: 80000
+
+# Runtime dependencies the .deb declares for the system to satisfy.
+#
+# Unlike the AppImage (which bundles libmpv via ldd), the .deb uses the distro's
+# libmpv: media_kit on Linux links the system library (media_kit_libs_linux
+# bundles nothing, ADR 0018). Built on ubuntu-22.04, the plugin's NEEDED soname
+# is libmpv.so.1, provided by the `libmpv1` package — so that is the honest
+# dependency here. Debian/Ubuntu users on newer libmpv (libmpv2) install the
+# self-contained AppImage instead. libgtk-3-0 is the GTK 3 runtime the Flutter
+# shell links; glibc is guaranteed by the 22.04 build floor.
+# https://www.debian.org/doc/debian-policy/ch-relationships.html
+dependencies:
+  - libgtk-3-0
+  - libmpv1
+
+essential: false
+
+icon: linux/packaging/jyn.png
+
+generic_name: Friendship river
+
+keywords:
+  - jyn
+  - friends
+  - p2p
+  - river
+
+metainfo: linux/packaging/app.jyn.jyn.metainfo.xml
+
+# https://specifications.freedesktop.org/menu-spec/latest/
+categories:
+  - Network
+
+startup_notify: true

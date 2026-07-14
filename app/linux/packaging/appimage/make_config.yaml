@@ -1,0 +1,27 @@
+# AppImage packaging (ADR 0019): a single self-contained file that bundles GTK
+# and libmpv, no sandbox — so the p2panda node's arbitrary ports and LAN/mDNS
+# discovery aren't fought by a portal. The icon reuses the macOS app icon.
+display_name: jyn
+
+icon: linux/packaging/jyn.png
+
+generic_name: Friendship river
+
+keywords:
+  - jyn
+  - friends
+  - p2p
+  - river
+
+categories:
+  - Network
+
+metainfo: linux/packaging/app.jyn.jyn.metainfo.xml
+
+startup_notify: true
+
+# Left empty on purpose: the AppImage maker runs `ldd` on the bundled plugins
+# and copies their shared-library closure into the AppDir. media_kit's video
+# plugin links the build host's libmpv (ADR 0018), so libmpv and its transitive
+# deps are pulled in automatically — nothing to list here.
+include: []

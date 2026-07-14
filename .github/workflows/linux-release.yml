@@ -1,0 +1,107 @@
+name: linux-release
+
+# Linux is cut in CI (ADR 0019): unlike macOS, which is released locally by
+# scripts/release.sh because notarization needs a Mac, `flutter build linux`
+# needs a Linux host. A version tag (pushed by release.sh) triggers this
+# workflow, which builds an AppImage + a .deb keyed to the shared VERSION file
+# and attaches them to the same GitHub Release. There is no auto-update on
+# Linux — updates are a manual re-download.
+on:
+  push:
+    tags:
+      - 'v*'
+
+concurrency:
+  group: linux-release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # Bump alongside the local toolchain (see README) so CI mirrors dev.
+  FLUTTER_VERSION: 3.41.7
+  # Let appimagetool run without FUSE on the runner.
+  APPIMAGE_EXTRACT_AND_RUN: 1
+
+jobs:
+  linux:
+    name: build & publish (Linux)
+    # ubuntu-22.04 sets the glibc-2.35 compatibility floor (ADR 0019).
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # `git rev-list --count HEAD` needs full history for the build number.
+          fetch-depth: 0
+      - name: Install build + packaging deps
+        run: |
+          sudo apt-get update
+          # libmpv-dev: media_kit's video plugin links against libmpv via
+          # pkg-config (ADR 0018). At build the AppImage maker runs `ldd` on
+          # that plugin and copies libmpv + its transitive deps into the
+          # AppDir, so the AppImage ends up self-contained.
+          # libasound2-dev: the volume_controller plugin's Linux CMake does
+          # find_package(ALSA REQUIRED).
+          sudo apt-get install -y \
+            clang cmake ninja-build pkg-config libgtk-3-dev libmpv-dev \
+            libasound2-dev xvfb imagemagick desktop-file-utils libfuse2
+      - name: Install appimagetool
+        run: |
+          sudo curl -fsSL -o /usr/local/bin/appimagetool \
+            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          sudo chmod +x /usr/local/bin/appimagetool
+      # cargokit compiles the core during the build.
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: Resolve packages
+        run: flutter pub get
+      # Project the shared VERSION into the Flutter build numbers, exactly as
+      # scripts/release.sh does for macOS, so the release is coherent.
+      - name: Sync version from VERSION
+        working-directory: ${{ github.workspace }}
+        run: |
+          SEMVER="$(tr -d '[:space:]' < VERSION)"
+          BUILD="$(git rev-list --count HEAD)"
+          python3 scripts/release_tools.py sync-pubspec "$SEMVER" "$BUILD" app/pubspec.yaml
+      - name: Install flutter_distributor
+        run: dart pub global activate flutter_distributor
+      - name: Build AppImage + .deb
+        run: |
+          export PATH="$PATH:$HOME/.pub-cache/bin"
+          flutter_distributor release --name linux
+      # Prove the freshly built app runs before we publish it.
+      - name: Smoke test
+        run: tool/linux_smoke_test.sh
+      - name: Attach artifacts to the GitHub Release
+        working-directory: ${{ github.workspace }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          SEMVER="$(tr -d '[:space:]' < VERSION)"
+          mapfile -t ASSETS < <(
+            find app/dist -type f \( -name '*.AppImage' -o -name '*.deb' \) | sort
+          )
+          echo "Artifacts:"; printf '  - %s\n' "${ASSETS[@]}"
+          if [ "${#ASSETS[@]}" -eq 0 ]; then
+            echo "!! no AppImage/.deb produced under app/dist" >&2; exit 1
+          fi
+          # The macOS release (release.sh) creates this same Release; whichever
+          # side runs first creates it, the other just uploads. Create if
+          # absent, then upload with --clobber so a re-run replaces stale assets.
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --title "jyn ${SEMVER}" \
+              --notes "Linux artifacts (AppImage + .deb)."
+          fi
+          gh release upload "$TAG" "${ASSETS[@]}" --clobber
